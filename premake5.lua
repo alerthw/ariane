@@ -38,6 +38,7 @@ luadir = "/usr/include/lua5.4"
 workspace "librwgta"
 	location "build"
 	language "C++"
+	cppdialect "C++14"
 
 	configurations { "Release", "Debug" }
 	filter { "system:windows" }
@@ -52,6 +53,9 @@ workspace "librwgta"
 		if _OPTIONS["gfxlib"] == "sdl2" then
 			includedirs { "/usr/include/SDL2" }
 		end
+	filter { "system:macosx" }
+		platforms { "macos-amd64-null", "macos-amd64-gl3",
+			"macos-arm64-null", "macos-arm64-gl3" }
 	filter {}
 
 	filter "configurations:Debug"
@@ -61,7 +65,7 @@ workspace "librwgta"
 		defines { "NDEBUG" }
 		optimize "On"
 	filter "configurations:ReleaseStatic"
-		flags { "StaticRuntime" }
+		staticruntime("On")
 
 	filter { "platforms:*null" }
 		defines { "RW_NULL" }
@@ -86,13 +90,15 @@ workspace "librwgta"
 		architecture "x86_64"
 	filter { "platforms:*x86*" }
 		architecture "x86"
-	filter { "platforms:*arm*" }
+	filter { "platforms:*-arm-*" }
 		architecture "ARM"
 
 	filter { "platforms:win*" }
 		system "windows"
 	filter { "platforms:linux*" }
 		system "linux"
+	filter { "platforms:macos*" }
+		system "macosx"
 
 	filter { "platforms:win*gl3" }
 		defines { "GLEW_STATIC" }
@@ -110,6 +116,9 @@ workspace "librwgta"
 		if _OPTIONS["gfxlib"] == "sdl2" then
 			includedirs { "/mingw/include/SDL2" } -- TODO: Detect this properly
 		end
+
+	filter { "platforms:macos*gl3" }
+		includedirs { "/opt/homebrew/include", "/usr/local/include" }
 
 	filter {}
 
@@ -152,6 +161,14 @@ function findlibs()
 		links { "opengl32" }
 		if _OPTIONS["gfxlib"] == "glfw" then
 			links { "glfw3" }
+		else
+			links { "SDL2" }
+		end
+	filter { "platforms:macos*gl3" }
+		linkoptions { "-framework OpenGL", "-framework Cocoa", "-framework IOKit", "-framework CoreVideo" }
+		libdirs { "/opt/homebrew/lib", "/usr/local/lib" }
+		if _OPTIONS["gfxlib"] == "glfw" then
+			links { "glfw" }
 		else
 			links { "SDL2" }
 		end
@@ -216,7 +233,7 @@ project "vcsconv"
 project "lcsview"
 	kind "WindowedApp"
 	characterset ("MBCS")
-	flags { "WinMain" }
+	entrypoint("WinMainCRTStartup")
 	skeltool("storiesview")
 	includedirs { "tools/storiesconv" }
 	files { "tools/storiesconv/relocchunk.cpp" }
@@ -235,7 +252,7 @@ project "lcsview"
 project "vcsview"
 	kind "WindowedApp"
 	characterset ("MBCS")
-	flags { "WinMain" }
+	entrypoint("WinMainCRTStartup")
 	skeltool("storiesview")
 	includedirs { "tools/storiesconv" }
 	files { "tools/storiesconv/relocchunk.cpp" }
@@ -254,7 +271,11 @@ project "vcsview"
 project "euryopa"
 	kind "WindowedApp"
 	characterset ("MBCS")
-	flags { "WinMain" }
+	filter { "system:windows" }
+		entrypoint("WinMainCRTStartup")
+	filter { "system:macosx" }
+		kind "ConsoleApp"
+	filter {}
 	skeltool("euryopa")
 	includedirs { "tools/euryopa" }
 	files { "tools/euryopa/minilzo/minilzo.c" }
@@ -264,7 +285,7 @@ project "euryopa"
 project "gtaclumpview"
 	kind "WindowedApp"
 	characterset ("MBCS")
-	flags { "WinMain" }
+	entrypoint("WinMainCRTStartup")
 	skeltool("gtaclumpview")
 	includedirs { "tools/gtaclumpview" }
 	removeplatforms { "*null" }
@@ -284,7 +305,7 @@ project "d3d9test"
 	tool("d3d9test")
 	kind "WindowedApp"
 	characterset ("MBCS")
-	flags { "WinMain" }
+	entrypoint("WinMainCRTStartup")
 	removeplatforms { "*gl3", "*null" }
 	links { "winmm" }
 
@@ -293,7 +314,7 @@ project "IIItest"
 	removelinks { "librwgta" }
 	kind "WindowedApp"
 	characterset ("MBCS")
-	flags { "WinMain" }
+	entrypoint("WinMainCRTStartup")
 	removeplatforms { "*null" }
 	files { path.join("tools/IIItest/*") }
 	debugdir "C:/Users/aap/games/gta3"
