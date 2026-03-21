@@ -41,7 +41,7 @@ jobs:
       - name: Generate librw project files
         shell: cmd
         working-directory: librw
-        run: premake5 vs2022
+        run: premake5 vs2019
 
       - name: Build librw
         shell: cmd
@@ -51,7 +51,7 @@ jobs:
       - name: Generate ariane project files
         shell: cmd
         working-directory: ariane
-        run: premake5 vs2022
+        run: premake5 vs2019
 
       - name: Build euryopa
         shell: cmd
