@@ -245,6 +245,63 @@ saveAllIpls(void)
 }
 
 static void
+testInGame(void)
+{
+	// Save all IPLs first
+	saveAllIpls();
+	Toast(TOAST_SAVE, "Saved all IPL files");
+
+	// Only III/VC/SA supported
+	if(gameversion != GAME_III && gameversion != GAME_VC && gameversion != GAME_SA){
+		Toast(TOAST_SAVE, "Test in Game: unsupported game");
+		return;
+	}
+
+	// Camera position -> snap to ground
+	rw::V3d pos = TheCamera.m_position;
+	rw::V3d groundHit;
+	if(GetGroundPlacementSurface(pos, &groundHit))
+		pos.z = groundHit.z + 1.0f;
+	// If no ground found: use camera pos as-is (player will fall)
+
+	// Camera heading
+	float heading = TheCamera.getHeading();
+
+	// Write teleport file in game root (CWD)
+	FILE *f = fopen("ariane_teleport.txt", "w");
+	if(f){
+		fprintf(f, "%f %f %f %f\n", pos.x, pos.y, pos.z, heading);
+		fclose(f);
+	} else {
+		Toast(TOAST_SAVE, "Failed to write teleport file");
+		return;
+	}
+
+	// Launch game executable
+	const char *exeName = nil;
+	if(isIII()) exeName = "gta3.exe";
+	else if(isVC()) exeName = "gta-vc.exe";
+	else if(isSA()) exeName = "gta_sa.exe";
+
+#ifdef _WIN32
+	STARTUPINFOA si;
+	PROCESS_INFORMATION pi;
+	memset(&si, 0, sizeof(si));
+	si.cb = sizeof(si);
+	memset(&pi, 0, sizeof(pi));
+	if(CreateProcessA(exeName, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)){
+		CloseHandle(pi.hProcess);
+		CloseHandle(pi.hThread);
+		Toast(TOAST_SAVE, "Launching %s...", exeName);
+	} else {
+		Toast(TOAST_SAVE, "Failed to launch %s", exeName);
+	}
+#else
+	Toast(TOAST_SAVE, "Game launch only supported on Windows");
+#endif
+}
+
+static void
 uiMainmenu(void)
 {
 	if(ImGui::BeginMainMenuBar()){
@@ -252,6 +309,9 @@ uiMainmenu(void)
 			if(ImGui::MenuItem("Save All IPLs", "Ctrl+S")){
 				saveAllIpls();
 				Toast(TOAST_SAVE, "Saved all IPL files");
+			}
+			if(ImGui::MenuItem("Test in Game", "Ctrl+G")){
+				testInGame();
 			}
 			ImGui::Separator();
 			if(ImGui::MenuItem("Exit", "Alt+F4")) sk::globals.quit = 1;
@@ -1794,7 +1854,12 @@ gui(void)
 		Toast(TOAST_SAVE, "Saved all IPL files");
 	}
 
-	if(CPad::IsKeyJustDown('G'))
+	// Ctrl+G to test in game
+	if(CPad::IsCtrlDown() && CPad::IsKeyJustDown('G')){
+		testInGame();
+	}
+
+	if(!CPad::IsCtrlDown() && CPad::IsKeyJustDown('G'))
 		SnapSelectedToGround(CPad::IsShiftDown());
 
 	if(CPad::IsKeyJustDown('T')) showTimeWeatherWindow ^= 1;

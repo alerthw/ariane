@@ -649,8 +649,8 @@ FindGroundHitInList(CPtrList *list, const Ray &ray, float x, float y, rw::V3d *b
 	}
 }
 
-static bool
-GetGroundPlacementSurface(rw::V3d pos, rw::V3d *hitPos, rw::V3d *hitNormal = nil, bool ignoreSelection = false)
+bool
+GetGroundPlacementSurface(rw::V3d pos, rw::V3d *hitPos, rw::V3d *hitNormal, bool ignoreSelection)
 {
 	Ray ray;
 	ray.start = pos;

@@ -379,6 +379,7 @@ int GetSpawnObjectId(void);
 void SetSpawnObjectId(int id);
 int GetLodForObject(int id);
 int SnapSelectedToGround(bool alignRotation);
+bool GetGroundPlacementSurface(rw::V3d pos, rw::V3d *hitPos, rw::V3d *hitNormal = nil, bool ignoreSelection = false);
 
 // Object Browser categories & favourites
 void InitObjectCategories(void);
