@@ -52,7 +52,7 @@ jobs:
         shell: pwsh
         run: |
           $file = "librw/skeleton/imgui/imgui_impl_rw.cpp"
-          (Get-Content $file) -replace '#include <rw.h>', "#include <rw.h>`n#ifdef RW_D3D9`n#include <d3d9.h>`n#endif" | Set-Content $file
+          (Get-Content $file) -replace '#include <rw.h>', "#include <rw.h>`n#ifdef RW_D3D9`n#include `"../../src/d3d/rwd3d.h`"`n#endif" | Set-Content $file
 
       - name: Generate ariane project files
         shell: cmd
