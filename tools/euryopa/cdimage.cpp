@@ -347,6 +347,36 @@ ReadFileFromImage(int i, int *size)
 	return streamingBuffer;
 }
 
+bool
+WriteFileToImage(int i, uint8 *data, int size)
+{
+	int img;
+	CdImage *cdimg;
+	img = i>>24 & 0xFF;
+	i = i & 0xFFFFFF;
+	cdimg = &cdImages[img];
+	DirEntry *de = &cdimg->directory[i];
+
+	// Reopen in r+b mode for in-place writing
+	char path[1024];
+	strncpy(path, cdimg->name, sizeof(path));
+	rw::makePath(path);
+	FILE *f = fopen(path, "r+b");
+	if(f == nil){
+		log("WriteFileToImage: can't open %s for writing\n", path);
+		return false;
+	}
+	fseek(f, de->position*2048, SEEK_SET);
+	size_t written = fwrite(data, 1, size, f);
+	fclose(f);
+	log("WriteFileToImage: wrote %d/%d bytes at sector %d in %s\n",
+		(int)written, size, de->position, path);
+
+	// Also update the in-memory cached file handle
+	// (re-read will pick up new data)
+	return true;
+}
+
 void
 RequestObject(int id)
 {

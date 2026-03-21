@@ -11,6 +11,140 @@ static bool showTimeWeatherWindow;
 static bool showViewWindow;
 static bool showRenderingWindow;
 
+// Toast notification system
+#define TOAST_MAX 5
+#define TOAST_DURATION 2.0f
+#define TOAST_FADE_IN 0.15f
+#define TOAST_FADE_OUT 0.4f
+
+struct ToastEntry {
+	char text[128];
+	float timer;		// time remaining (counts down)
+	float totalTime;	// total lifetime
+	ToastCategory category;
+};
+
+static ToastEntry toasts[TOAST_MAX];
+static int numToasts;
+static bool toastEnabled = true;
+static bool toastCategoryEnabled[TOAST_NUM_CATEGORIES] = { true, true, true, true, true };
+static const char *toastCategoryNames[TOAST_NUM_CATEGORIES] = {
+	"Undo / Redo", "Delete", "Copy / Paste", "Save", "Selection"
+};
+
+void
+Toast(ToastCategory cat, const char *fmt, ...)
+{
+	if(!toastEnabled || !toastCategoryEnabled[cat])
+		return;
+
+	// Shift existing toasts down if full
+	if(numToasts >= TOAST_MAX){
+		memmove(&toasts[0], &toasts[1], (TOAST_MAX-1)*sizeof(ToastEntry));
+		numToasts = TOAST_MAX - 1;
+	}
+
+	ToastEntry *t = &toasts[numToasts++];
+	va_list args;
+	va_start(args, fmt);
+	vsnprintf(t->text, sizeof(t->text), fmt, args);
+	va_end(args);
+	t->totalTime = TOAST_DURATION + TOAST_FADE_IN + TOAST_FADE_OUT;
+	t->timer = t->totalTime;
+	t->category = cat;
+}
+
+static void
+uiToasts(void)
+{
+	if(numToasts == 0) return;
+
+	float dt = ImGui::GetIO().DeltaTime;
+	float screenW = ImGui::GetIO().DisplaySize.x;
+	float screenH = ImGui::GetIO().DisplaySize.y;
+
+	// Update timers and remove expired
+	for(int i = 0; i < numToasts; ){
+		toasts[i].timer -= dt;
+		if(toasts[i].timer <= 0.0f){
+			memmove(&toasts[i], &toasts[i+1], (numToasts-i-1)*sizeof(ToastEntry));
+			numToasts--;
+		}else{
+			i++;
+		}
+	}
+
+	// Render from bottom up, centered horizontally
+	float yBase = screenH - 60.0f;
+	float spacing = 32.0f;
+
+	for(int i = numToasts - 1; i >= 0; i--){
+		ToastEntry *t = &toasts[i];
+		float elapsed = t->totalTime - t->timer;
+
+		// Compute alpha: fade in -> hold -> fade out
+		float alpha;
+		if(elapsed < TOAST_FADE_IN)
+			alpha = elapsed / TOAST_FADE_IN;
+		else if(t->timer < TOAST_FADE_OUT)
+			alpha = t->timer / TOAST_FADE_OUT;
+		else
+			alpha = 1.0f;
+
+		// Slide up slightly on appear
+		float slideOffset = 0.0f;
+		if(elapsed < TOAST_FADE_IN)
+			slideOffset = (1.0f - elapsed / TOAST_FADE_IN) * 10.0f;
+
+		ImVec2 textSize = ImGui::CalcTextSize(t->text);
+		float padX = 16.0f, padY = 8.0f;
+		float boxW = textSize.x + padX * 2;
+		float boxH = textSize.y + padY * 2;
+		float x = (screenW - boxW) * 0.5f;
+		float y = yBase - (numToasts - 1 - i) * spacing + slideOffset;
+
+		ImGui::SetNextWindowPos(ImVec2(x, y));
+		ImGui::SetNextWindowSize(ImVec2(boxW, boxH));
+		ImGui::SetNextWindowBgAlpha(0.0f);
+
+		char winId[32];
+		snprintf(winId, sizeof(winId), "##toast%d", i);
+		ImGui::Begin(winId, nil,
+			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+			ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+			ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing |
+			ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+		ImDrawList *dl = ImGui::GetWindowDrawList();
+
+		// Rounded rect background
+		ImU32 bgCol = IM_COL32(20, 20, 20, (int)(200 * alpha));
+		ImU32 borderCol = IM_COL32(80, 80, 80, (int)(150 * alpha));
+		ImVec2 p0(x, y);
+		ImVec2 p1(x + boxW, y + boxH);
+		dl->AddRectFilled(p0, p1, bgCol, 6.0f);
+		dl->AddRect(p0, p1, borderCol, 6.0f);
+
+		// Text
+		ImU32 textCol = IM_COL32(240, 240, 240, (int)(255 * alpha));
+		dl->AddText(ImVec2(x + padX, y + padY), textCol, t->text);
+
+		ImGui::End();
+	}
+}
+
+static void
+uiNotificationSettings(void)
+{
+	ImGui::Checkbox("Enable Notifications", &toastEnabled);
+	if(toastEnabled){
+		ImGui::Indent();
+		for(int i = 0; i < TOAST_NUM_CATEGORIES; i++)
+			ImGui::Checkbox(toastCategoryNames[i], &toastCategoryEnabled[i]);
+		ImGui::Unindent();
+	}
+}
+
 // From the demo, slightly changed
 struct ExampleAppLog
 {
@@ -77,10 +211,47 @@ struct ExampleAppLog
 static ImVec4 mkColor(rw::RGBA &c) { return ImVec4(c.red/255.0f, c.green/255.0f, c.blue/255.0f, c.alpha/255.0f); }
 
 static void
+saveAllIpls(void)
+{
+	// Collect unique IPL filenames from all instances
+	CPtrNode *p;
+	const char *saved[512];
+	int numSaved = 0;
+
+	for(p = instances.first; p; p = p->next){
+		ObjectInst *inst = (ObjectInst*)p->item;
+		if(inst->m_file == nil)
+			continue;
+		// Skip streaming IPL instances — those are saved via SaveBinaryIpls
+		if(inst->m_imageIndex >= 0)
+			continue;
+		// Check if we already saved this file
+		bool found = false;
+		for(int i = 0; i < numSaved; i++)
+			if(strcmp(saved[i], inst->m_file->name) == 0){
+				found = true;
+				break;
+			}
+		if(!found && numSaved < 512){
+			FileLoader::SaveScene(inst->m_file->name);
+			saved[numSaved++] = inst->m_file->name;
+		}
+	}
+
+	// Also patch binary IPLs in IMG for streaming instances
+	FileLoader::SaveBinaryIpls();
+}
+
+static void
 uiMainmenu(void)
 {
 	if(ImGui::BeginMainMenuBar()){
 		if(ImGui::BeginMenu("File")){
+			if(ImGui::MenuItem("Save All IPLs", "Ctrl+S")){
+				saveAllIpls();
+				Toast(TOAST_SAVE, "Saved all IPL files");
+			}
+			ImGui::Separator();
 			if(ImGui::MenuItem("Exit", "Alt+F4")) sk::globals.quit = 1;
 			ImGui::EndMenu();
 		}
@@ -93,6 +264,11 @@ uiMainmenu(void)
 			if(ImGui::MenuItem("Log ", nil, showLogWindow)) { showLogWindow ^= 1; }
 			if(ImGui::MenuItem("Demo ", nil, showDemoWindow)) { showDemoWindow ^= 1; }
 			if(ImGui::MenuItem("Help", nil, showHelpWindow)) { showHelpWindow ^= 1; }
+			ImGui::Separator();
+			if(ImGui::BeginMenu("Notifications")){
+				uiNotificationSettings();
+				ImGui::EndMenu();
+			}
 			ImGui::EndMenu();
 		}
 
@@ -139,8 +315,18 @@ uiHelpWindow(void)
 		"Alt+click to remove from the selection,\n"
 		"Ctrl+click to toggle selection.");
 	ImGui::BulletText("In the editor window, double click an instance to jump there,\n"
-		"Right click a selection to deselect it.");
+		"Right click a selection to deselect it.\n"
+		"Right click a deleted instance to undelete it.");
 	ImGui::BulletText("Use the filter in the instance list to find instances by name.");
+	ImGui::Separator();
+	ImGui::BulletText("Gizmo: W = Translate, Q = Rotate\n"
+		"Select an object to manipulate it with the gizmo.");
+	ImGui::BulletText("Delete/Backspace: delete selected building(s)\n"
+		"Deleting also removes linked LOD instances.");
+	ImGui::BulletText("Ctrl+C: Copy selected building(s)\n"
+		"Ctrl+V: Paste (offset +10 on X), with LOD linking");
+	ImGui::BulletText("Ctrl+S: Save all modified IPL files\n"
+		"Deleted instances are commented out with #.");
 
 	if(ImGui::CollapsingHeader("Dear ImGUI help")){
 		ImGui::ShowUserGuide();
@@ -719,15 +905,43 @@ uiInstInfo(ObjectInst *inst)
 
 	ImGui::Text("IPL: %s", inst->m_file->name);
 
-	ImGui::Text("Translation: %.3f %.3f %.3f",
-		inst->m_translation.x,
-		inst->m_translation.y,
-		inst->m_translation.z);
+	if(inst->m_isDeleted){
+		ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ImColor(255, 80, 80));
+		ImGui::Text("DELETED");
+		ImGui::PopStyleColor();
+		ImGui::SameLine();
+		if(ImGui::Button("Undelete"))
+			inst->Undelete();
+	}else{
+		if(ImGui::Button("Delete")){
+			inst->Delete();
+		}
+		if(inst->m_lod){
+			ImGui::SameLine();
+			ImGui::TextDisabled("(LOD: %s)", GetObjectDef(inst->m_lod->m_objectId)->m_name);
+		}
+	}
+
+	bool changed = false;
+	changed |= ImGui::DragFloat3("Translation", (float*)&inst->m_translation, 0.1f);
 	ImGui::Text("Rotation: %.3f %.3f %.3f %.3f",
 		inst->m_rotation.x,
 		inst->m_rotation.y,
-		inst->m_rotation.x,
+		inst->m_rotation.z,
 		inst->m_rotation.w);
+	if(changed){
+		inst->m_isDirty = true;
+		inst->UpdateMatrix();
+		if(inst->m_rwObject){
+			rw::Frame *f;
+			if(obj->m_type == ObjectDef::ATOMIC)
+				f = ((rw::Atomic*)inst->m_rwObject)->getFrame();
+			else
+				f = ((rw::Clump*)inst->m_rwObject)->getFrame();
+			f->transform(&inst->m_matrix, rw::COMBINEREPLACE);
+		}
+	}
+
 	if(params.numAreas)
 		ImGui::Text("Area: %d", inst->m_area);
 
@@ -1053,28 +1267,39 @@ uiEditorWindow(void)
 			obj = GetObjectDef(inst->m_objectId);
 			txd = GetTxdDef(obj->m_txdSlot);
 			if(filter.PassFilter(obj->m_name) && filter2.PassFilter(txd->name)){
-				bool pop = false;
-				if(inst->m_selected){
+				int numPops = 0;
+				if(inst->m_isDeleted){
+					ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ImColor(128, 128, 128));
+					numPops++;
+				}else if(inst->m_selected){
 					ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ImColor(255, 0, 0));
-					pop = true;
+					numPops++;
 				}
 				ImGui::PushID(inst);
-				sprintf(buf, "%-20s %-20s %8.2f %8.2f %8.2f", obj->m_name, txd->name,
+				sprintf(buf, "%s%-20s %-20s %8.2f %8.2f %8.2f",
+					inst->m_isDeleted ? "[X] " : "",
+					obj->m_name, txd->name,
 					inst->m_translation.x, inst->m_translation.y, inst->m_translation.z);
 				ImGui::Selectable(buf);
 				ImGui::PopID();
 				if(ImGui::IsItemHovered()){
-					if(ImGui::IsMouseClicked(1))
-						inst->Select();
+					if(ImGui::IsMouseClicked(1)){
+						if(inst->m_isDeleted)
+							inst->Undelete();
+						else
+							inst->Select();
+					}
 					if(ImGui::IsMouseDoubleClicked(0))
 						inst->JumpTo();
 				}
-				if(pop)
-					ImGui::PopStyleColor();
-				if(highlight)
-					inst->m_highlight = HIGHLIGHT_FILTER;
-				if(ImGui::IsItemHovered())
-					inst->m_highlight = HIGHLIGHT_HOVER;
+				if(numPops)
+					ImGui::PopStyleColor(numPops);
+				if(!inst->m_isDeleted){
+					if(highlight)
+						inst->m_highlight = HIGHLIGHT_FILTER;
+					if(ImGui::IsItemHovered())
+						inst->m_highlight = HIGHLIGHT_HOVER;
+				}
 			}
 		}
 		ImGui::TreePop();
@@ -1126,6 +1351,19 @@ static void
 uiInstWindow(void)
 {
 	ImGui::Begin("Object Info", &showInstanceWindow);
+
+	// Gizmo toolbar
+	ImGui::Checkbox("Gizmo", &gGizmoEnabled);
+	if(gGizmoEnabled){
+		ImGui::SameLine();
+		if(ImGui::RadioButton("Translate (W)", gGizmoMode == GIZMO_TRANSLATE))
+			gGizmoMode = GIZMO_TRANSLATE;
+		ImGui::SameLine();
+		if(ImGui::RadioButton("Rotate (Q)", gGizmoMode == GIZMO_ROTATE))
+			gGizmoMode = GIZMO_ROTATE;
+	}
+	ImGui::Separator();
+
 	if(selection.first){
 		ObjectInst *inst = (ObjectInst*)selection.first->item;
 		ObjectDef *obj = GetObjectDef(inst->m_objectId);
@@ -1193,7 +1431,56 @@ gui(void)
 	Path::guiHoveredNode = nil;
 	uiMainmenu();
 
-	if(CPad::IsKeyJustDown('C')) gUseViewerCam = !gUseViewerCam;
+	// Copy/Paste
+	if(CPad::IsCtrlDown() && CPad::IsKeyJustDown('C')){
+		int before = 0;
+		for(CPtrNode *p = selection.first; p; p = p->next) before++;
+		CopySelected();
+		if(before > 0)
+			Toast(TOAST_COPY_PASTE, "Copied %d instance(s)", before);
+	}
+	if(CPad::IsCtrlDown() && CPad::IsKeyJustDown('V')){
+		int before = 0;
+		for(CPtrNode *p = instances.first; p; p = p->next) before++;
+		PasteClipboard();
+		int after = 0;
+		for(CPtrNode *p = instances.first; p; p = p->next) after++;
+		int pasted = after - before;
+		if(pasted > 0)
+			Toast(TOAST_COPY_PASTE, "Pasted %d instance(s)", pasted);
+	}
+
+	if(!CPad::IsCtrlDown() && CPad::IsKeyJustDown('C')) gUseViewerCam = !gUseViewerCam;
+
+	// Gizmo mode shortcuts
+	if(CPad::IsKeyJustDown('W')) gGizmoMode = GIZMO_TRANSLATE;
+	if(CPad::IsKeyJustDown('Q')) gGizmoMode = GIZMO_ROTATE;
+
+	// Delete selected instances
+	if(CPad::IsKeyJustDown(KEY_DEL) || CPad::IsKeyJustDown(KEY_BACKSP)){
+		int count = 0;
+		for(CPtrNode *p = selection.first; p; p = p->next) count++;
+		if(count > 0){
+			DeleteSelected();
+			Toast(TOAST_DELETE, "Deleted %d instance(s)", count);
+		}
+	}
+
+	// Undo/Redo
+	if(CPad::IsCtrlDown() && CPad::IsKeyJustDown('Z')){
+		Undo();
+		Toast(TOAST_UNDO_REDO, "Undo");
+	}
+	if(CPad::IsCtrlDown() && CPad::IsKeyJustDown('Y')){
+		Redo();
+		Toast(TOAST_UNDO_REDO, "Redo");
+	}
+
+	// Ctrl+S to save all IPLs
+	if(CPad::IsCtrlDown() && CPad::IsKeyJustDown('S')){
+		saveAllIpls();
+		Toast(TOAST_SAVE, "Saved all IPL files");
+	}
 
 	if(CPad::IsKeyJustDown('T')) showTimeWeatherWindow ^= 1;
 	if(showTimeWeatherWindow){
@@ -1202,7 +1489,7 @@ gui(void)
 		ImGui::End();
 	}
 
-	if(CPad::IsKeyJustDown('V')) showViewWindow ^= 1;
+	if(!CPad::IsCtrlDown() && CPad::IsKeyJustDown('V')) showViewWindow ^= 1;
 	if(showViewWindow){
 		ImGui::Begin("View", &showViewWindow);
 		uiView();
@@ -1229,6 +1516,8 @@ gui(void)
 	}
 
 	if(showLogWindow) logwindow.Draw("Log", &showLogWindow);
+
+	uiToasts();
 
 //	uiTest();
 }

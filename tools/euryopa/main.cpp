@@ -172,7 +172,7 @@ plUpdatePad(CControllerState *state)
 void
 Init(void)
 {
-	sk::globals.windowtitle = "Euryopa";
+	sk::globals.windowtitle = "Ariane - Map Editor (GTA III, VC, SA)";
 	sk::globals.width = 1280;
 	sk::globals.height = 800;
 	sk::globals.quit = 0;

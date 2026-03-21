@@ -288,12 +288,71 @@ void LoadGame(void);
 void Idle(void);
 void DefinedState(void);
 
+// Gizmo
+enum GizmoMode {
+	GIZMO_TRANSLATE,
+	GIZMO_ROTATE
+};
+extern int gGizmoMode;
+extern bool gGizmoEnabled;
+
+// Undo/Redo
+enum UndoType {
+	UNDO_MOVE,
+	UNDO_ROTATE,
+	UNDO_DELETE,
+	UNDO_PASTE,
+};
+
+struct UndoAction {
+	int type;
+	// For MOVE/ROTATE: single instance
+	ObjectInst *inst;
+	rw::V3d oldPos;
+	rw::Quat oldRot;
+	rw::V3d newPos;
+	rw::Quat newRot;
+	// For MOVE: LOD that was also moved
+	ObjectInst *lodInst;
+	rw::V3d lodOldPos;
+	rw::V3d lodNewPos;
+	// For DELETE: list of deleted instances (inst + LOD cascade)
+	ObjectInst *deletedInsts[64];
+	int numDeleted;
+	// For PASTE: list of pasted instances (to delete on undo)
+	ObjectInst *pastedInsts[64];
+	int numPasted;
+};
+
+void UndoRecordMove(ObjectInst *inst, rw::V3d oldPos, ObjectInst *lodInst, rw::V3d lodOldPos);
+void UndoRecordRotate(ObjectInst *inst, rw::Quat oldRot);
+void UndoRecordDelete(ObjectInst **insts, int num);
+void UndoRecordPaste(ObjectInst **insts, int num);
+void Undo(void);
+void Redo(void);
+
+// Copy/Paste
+void CopySelected(void);
+void PasteClipboard(void);
+
+// Toast notifications
+enum ToastCategory {
+	TOAST_UNDO_REDO,
+	TOAST_DELETE,
+	TOAST_COPY_PASTE,
+	TOAST_SAVE,
+	TOAST_SELECTION,
+	TOAST_NUM_CATEGORIES
+};
+void Toast(ToastCategory cat, const char *fmt, ...);
+
 // Game Data structures
 
 void AddCdImage(const char *path);
 void InitCdImages(void);
 uint8 *ReadFileFromImage(int i, int *size);
 GameFile *GetGameFileFromImage(int i);
+bool WriteFileToImage(int i, uint8 *data, int size);
 void RequestObject(int id);
 void LoadAllRequestedObjects(void);
 
@@ -462,6 +521,11 @@ struct ObjectInst
 	int32 m_id;	// to identify when picking
 	int m_selected;
 	int m_highlight;	// various ways to highlight this object
+	bool m_isDeleted;	// marked for deletion (commented out in IPL)
+	bool m_isDirty;		// position/rotation was modified
+	int m_iplIndex;		// index of this instance within its IPL file (for save)
+	int32 m_imageIndex;	// IMG directory index (for binary IPL save), -1 if text IPL
+	int m_binInstIndex;	// index within binary IPL instance array
 
 	GameFile *m_file;
 
@@ -476,12 +540,16 @@ struct ObjectInst
 	void JumpTo(void);
 	void Select(void);
 	void Deselect(void);
+	void Delete(void);
+	void Undelete(void);
 };
 extern CPtrList instances;
 extern CPtrList selection;
 ObjectInst *GetInstanceByID(int32 id);
 ObjectInst *AddInstance(void);
 void ClearSelection(void);
+void DeleteSelected(void);
+void RemoveInstFromSectors(ObjectInst *inst);
 
 
 
@@ -680,6 +748,8 @@ struct DatDesc
 char *LoadLine(FILE *f);
 void LoadLevel(const char *filename);
 rw::TexDictionary *LoadTexDictionary(const char *path);
+void SaveScene(const char *filename);
+void SaveBinaryIpls(void);
 }
 
 // Rendering

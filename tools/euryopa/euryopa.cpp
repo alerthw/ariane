@@ -5,6 +5,9 @@ int gameplatform;
 
 Params params;
 
+int gGizmoMode = GIZMO_TRANSLATE;
+bool gGizmoEnabled = true;
+
 int gameTxdSlot;
 
 int currentHour = 12;
@@ -381,7 +384,7 @@ handleTool(void)
 	// select
 	if(CPad::IsMButtonClicked(1)){
 		ObjectInst *inst = GetInstanceByID(pick());
-		if(inst){
+		if(inst && !inst->m_isDeleted){
 			if(CPad::IsShiftDown())
 				inst->Select();
 			else if(CPad::IsAltDown())
@@ -405,7 +408,7 @@ handleTool(void)
 		}else{
 			ClearSelection();
 			ObjectInst *inst = GetInstanceByID(pick());
-			if(inst)
+			if(inst && !inst->m_isDeleted)
 				inst->Select();
 		}
 	}else if(CPad::IsMButtonClicked(3)){
@@ -520,34 +523,165 @@ LoadGame(void)
 	}
 }
 
+static void
+updateRwFrame(ObjectInst *inst)
+{
+	if(inst->m_rwObject == nil) return;
+	ObjectDef *obj = GetObjectDef(inst->m_objectId);
+	rw::Frame *f;
+	if(obj->m_type == ObjectDef::ATOMIC)
+		f = ((rw::Atomic*)inst->m_rwObject)->getFrame();
+	else
+		f = ((rw::Clump*)inst->m_rwObject)->getFrame();
+	f->transform(&inst->m_matrix, rw::COMBINEREPLACE);
+}
+
 void
 dogizmo(void)
 {
+	if(!gGizmoEnabled)
+		return;
+	if(!selection.first)
+		return;
+
+	ObjectInst *inst = (ObjectInst*)selection.first->item;
+	if(inst->m_isDeleted)
+		return;
+
+	static bool wasDragging = false;
+	static rw::V3d dragStartPos;
+	static rw::Quat dragStartRot;
+	static rw::V3d dragStartLodPos;
+	static ObjectInst *dragLodInst;
+
 	rw::Camera *cam;
-	rw::Matrix tmp, view;
-	rw::RawMatrix gizview;
+	rw::RawMatrix gizobj;
 	float *fview, *fproj, *fobj;
-	static rw::RawMatrix gizobj;
-	static bool first = true;
-	if(first){
-		tmp.setIdentity();
-		convMatrix(&gizobj, &tmp);
-		gizobj.pos = TheCamera.m_target;
-		first = false;
-	}
+
+	// Build object matrix from instance
+	rw::convMatrix(&gizobj, &inst->m_matrix);
 
 	cam = (rw::Camera*)rw::engine->currentCamera;
-	rw::Matrix::invert(&view, cam->getFrame()->getLTM());
-	rw::convMatrix(&gizview, &view);
 	fview = (float*)&cam->devView;
 	fproj = (float*)&cam->devProj;
 	fobj = (float*)&gizobj;
 
 	ImGuiIO &io = ImGui::GetIO();
 	ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
-	ImGuizmo::Manipulate(fview, fproj, ImGuizmo::TRANSLATE, ImGuizmo::LOCAL, fobj, nil, nil);
-//	ImGuizmo::DrawCube(fview, fproj, fobj);
-//	ImGuizmo::DrawCube((float*)&gizview, (float*)&cam->devProj, (float*)&gizobj);
+
+	ImGuizmo::OPERATION op = gGizmoMode == GIZMO_ROTATE ? ImGuizmo::ROTATE : ImGuizmo::TRANSLATE;
+	ImGuizmo::Manipulate(fview, fproj, op, ImGuizmo::LOCAL, fobj, nil, nil);
+
+	bool isUsing = ImGuizmo::IsUsing();
+
+	// Capture start state when drag begins
+	if(isUsing && !wasDragging){
+		dragStartPos = inst->m_translation;
+		dragStartRot = inst->m_rotation;
+		dragLodInst = inst->m_lod;
+		if(dragLodInst)
+			dragStartLodPos = dragLodInst->m_translation;
+	}
+	// Record undo when drag ends
+	if(!isUsing && wasDragging){
+		if(gGizmoMode == GIZMO_TRANSLATE)
+			UndoRecordMove(inst, dragStartPos, dragLodInst, dragStartLodPos);
+		else if(gGizmoMode == GIZMO_ROTATE)
+			UndoRecordRotate(inst, dragStartRot);
+	}
+	wasDragging = isUsing;
+
+	if(isUsing){
+		// Extract translation from the gizmo result
+		rw::V3d newPos;
+		newPos.x = gizobj.pos.x;
+		newPos.y = gizobj.pos.y;
+		newPos.z = gizobj.pos.z;
+
+		if(gGizmoMode == GIZMO_TRANSLATE){
+			// Compute delta
+			rw::V3d delta = sub(newPos, inst->m_translation);
+
+			inst->m_translation = newPos;
+			inst->m_isDirty = true;
+			inst->UpdateMatrix();
+			updateRwFrame(inst);
+
+			// Also move the LOD if this instance has one
+			if(inst->m_lod && !inst->m_lod->m_isDeleted){
+				inst->m_lod->m_translation = add(inst->m_lod->m_translation, delta);
+				inst->m_lod->m_isDirty = true;
+				inst->m_lod->UpdateMatrix();
+				updateRwFrame(inst->m_lod);
+			}
+			// If this IS a LOD, move all HD children that reference it
+			CPtrNode *p;
+			for(p = instances.first; p; p = p->next){
+				ObjectInst *other = (ObjectInst*)p->item;
+				if(other != inst && other->m_lod == inst && !other->m_isDeleted){
+					other->m_translation = add(other->m_translation, delta);
+					other->m_isDirty = true;
+					other->UpdateMatrix();
+					updateRwFrame(other);
+				}
+			}
+		}else if(gGizmoMode == GIZMO_ROTATE){
+			// Extract rotation from the RawMatrix gizmo result
+			// Copy rotation part, keep same translation
+			inst->m_matrix.right.x = gizobj.right.x;
+			inst->m_matrix.right.y = gizobj.right.y;
+			inst->m_matrix.right.z = gizobj.right.z;
+			inst->m_matrix.up.x = gizobj.up.x;
+			inst->m_matrix.up.y = gizobj.up.y;
+			inst->m_matrix.up.z = gizobj.up.z;
+			inst->m_matrix.at.x = gizobj.at.x;
+			inst->m_matrix.at.y = gizobj.at.y;
+			inst->m_matrix.at.z = gizobj.at.z;
+			// pos stays the same
+
+			// Extract quaternion from the rotation matrix
+			// Matrix was built with conj(m_rotation), so we extract
+			// the quat from the matrix and conjugate it (negate x,y,z)
+			rw::Quat q;
+			rw::Matrix *m = &inst->m_matrix;
+			float trace = m->right.x + m->up.y + m->at.z;
+			if(trace > 0.0f){
+				float s = sqrtf(trace + 1.0f) * 2.0f;
+				q.w = 0.25f * s;
+				q.x = (m->up.z - m->at.y) / s;
+				q.y = (m->at.x - m->right.z) / s;
+				q.z = (m->right.y - m->up.x) / s;
+			}else if(m->right.x > m->up.y && m->right.x > m->at.z){
+				float s = sqrtf(1.0f + m->right.x - m->up.y - m->at.z) * 2.0f;
+				q.w = (m->up.z - m->at.y) / s;
+				q.x = 0.25f * s;
+				q.y = (m->up.x + m->right.y) / s;
+				q.z = (m->at.x + m->right.z) / s;
+			}else if(m->up.y > m->at.z){
+				float s = sqrtf(1.0f + m->up.y - m->right.x - m->at.z) * 2.0f;
+				q.w = (m->at.x - m->right.z) / s;
+				q.x = (m->up.x + m->right.y) / s;
+				q.y = 0.25f * s;
+				q.z = (m->at.y + m->up.z) / s;
+			}else{
+				float s = sqrtf(1.0f + m->at.z - m->right.x - m->up.y) * 2.0f;
+				q.w = (m->right.y - m->up.x) / s;
+				q.x = (m->at.x + m->right.z) / s;
+				q.y = (m->at.y + m->up.z) / s;
+				q.z = 0.25f * s;
+			}
+			// Conjugate: matrix was built from conj(rotation)
+			inst->m_rotation.x = -q.x;
+			inst->m_rotation.y = -q.y;
+			inst->m_rotation.z = -q.z;
+			inst->m_rotation.w = q.w;
+			inst->m_isDirty = true;
+		}
+
+		// Update the rw object frame for rotation case
+		if(gGizmoMode == GIZMO_ROTATE)
+			updateRwFrame(inst);
+	}
 }
 
 static uint64 frameCounter;
@@ -620,7 +754,7 @@ Draw(void)
 	// but also can mess with timecycle mid frame :/
 	gui();
 
-//	dogizmo();
+	dogizmo();
 
 	handleTool();
 

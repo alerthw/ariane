@@ -64,8 +64,13 @@ LoadDataFile(const char *filename, DatDesc *desc)
 		return;
 log("Loading data file %s\n", filename);
 	while(line = LoadLine(file)){
-		if(line[0] == '#')
+		if(line[0] == '#'){
+			// Pass # lines to handler so inst section
+			// can count deleted placeholders
+			if(handler)
+				handler(line);
 			continue;
+		}
 		void *tmp = DatDesc::get(desc, line);
 		if(tmp){
 			handler = (void(*)(char*))tmp;
@@ -353,11 +358,19 @@ LoadTXDParent(char *line)
 
 static ObjectInst *tmpInsts[8096];
 static int numTmpInsts;
+static int iplInstCounter;  // tracks instance index within current IPL file
 
 void
 LoadObjectInstance(char *line)
 {
 	using namespace rw;
+
+	// Deleted instance (commented out) - keep index slot for streaming IPL compatibility
+	if(line[0] == '#'){
+		tmpInsts[numTmpInsts++] = nil;
+		iplInstCounter++;
+		return;
+	}
 
 	FileObjectInstance fi;
 
@@ -394,11 +407,13 @@ LoadObjectInstance(char *line)
 	if(obj == nil){
 		log("warning: object %d was never defined\n", fi.objectId);
 		tmpInsts[numTmpInsts++] = nil;
+		iplInstCounter++;
 		return;
 	}
 
 	ObjectInst *inst = AddInstance();
 	inst->Init(&fi);
+	inst->m_iplIndex = iplInstCounter++;
 
 	if(!isSA() && obj->m_isBigBuilding)
 		inst->SetupBigBuilding();
@@ -603,17 +618,23 @@ SetupBigBuildings(void)
 
 	for(i = 0; i < numTmpInsts; i++){
 		inst = tmpInsts[i];
+		if(inst == nil) continue;	// deleted placeholder
 		if(inst->m_lodId < 0)
 			inst->m_lod = nil;
 		else{
 			lodinst = tmpInsts[inst->m_lodId];
-			inst->m_lod = lodinst;
-			lodinst->m_numChildren++;
+			if(lodinst == nil){
+				inst->m_lod = nil;	// LOD was deleted
+			}else{
+				inst->m_lod = lodinst;
+				lodinst->m_numChildren++;
+			}
 		}
 	}
 
 	for(i = 0; i < numTmpInsts; i++){
 		inst = tmpInsts[i];
+		if(inst == nil) continue;	// deleted placeholder
 		obj = GetObjectDef(inst->m_objectId);
 		if(obj->m_isBigBuilding || inst->m_numChildren)
 			inst->SetupBigBuilding();
@@ -634,6 +655,7 @@ void
 LoadScene(const char *filename)
 {
 	numTmpInsts = 0;
+	iplInstCounter = 0;
 	LoadDataFile(filename, iplDesc);
 
 	if(isSA()){
@@ -808,6 +830,247 @@ LoadLevel(const char *filename)
 		}
 	}
 	fclose(file);
+}
+
+
+// Write one instance line to file
+static void
+WriteInstLine(FILE *f, ObjectInst *inst, int lodIdx, bool deleted)
+{
+	ObjectDef *obj = GetObjectDef(inst->m_objectId);
+
+	// Reconstruct area flags
+	int area = inst->m_area;
+	if(isSA()){
+		if(inst->m_isUnimportant) area |= 0x100;
+		if(inst->m_isUnderWater) area |= 0x400;
+		if(inst->m_isTunnel) area |= 0x800;
+		if(inst->m_isTunnelTransition) area |= 0x1000;
+	}
+
+	const char *prefix = deleted ? "# " : "";
+
+	if(isSA()){
+		fprintf(f, "%s%d, %s, %d, %f, %f, %f, %f, %f, %f, %f, %d\n",
+			prefix,
+			inst->m_objectId, obj->m_name, area,
+			inst->m_translation.x, inst->m_translation.y, inst->m_translation.z,
+			inst->m_rotation.x, inst->m_rotation.y, inst->m_rotation.z, inst->m_rotation.w,
+			lodIdx);
+	}else{
+		fprintf(f, "%s%d, %s, %d, %f, %f, %f, 1, 1, 1, %f, %f, %f, %f\n",
+			prefix,
+			inst->m_objectId, obj->m_name, area,
+			inst->m_translation.x, inst->m_translation.y, inst->m_translation.z,
+			inst->m_rotation.x, inst->m_rotation.y, inst->m_rotation.z, inst->m_rotation.w);
+	}
+}
+
+// Save all instances that belong to a given IPL file
+// Deleted instances are commented out with #, but stay at their original
+// position to preserve LOD index compatibility with binary streaming IPLs.
+// On reload, the loader creates nil placeholders for # lines.
+void
+SaveScene(const char *filename)
+{
+	FILE *fin, *fout;
+	CPtrNode *p;
+	ObjectInst *inst;
+	char tmppath[1024];
+
+	// Collect all instances belonging to this file
+	int numInsts = 0;
+	ObjectInst *fileInsts[8096];
+	for(p = instances.first; p; p = p->next){
+		inst = (ObjectInst*)p->item;
+		if(strcmp(inst->m_file->name, filename) == 0)
+			fileInsts[numInsts++] = inst;
+	}
+
+	if(numInsts == 0){
+		log("SaveScene: no instances found for %s\n", filename);
+		return;
+	}
+
+	// Sort by original m_iplIndex
+	for(int i = 0; i < numInsts - 1; i++)
+		for(int j = i + 1; j < numInsts; j++)
+			if(fileInsts[i]->m_iplIndex > fileInsts[j]->m_iplIndex){
+				ObjectInst *tmp = fileInsts[i];
+				fileInsts[i] = fileInsts[j];
+				fileInsts[j] = tmp;
+			}
+
+	// Resolve the real OS path (converts backslashes etc)
+	char realpath[1024];
+	strncpy(realpath, filename, sizeof(realpath));
+	rw::makePath(realpath);
+
+	snprintf(tmppath, sizeof(tmppath), "%s.tmp", realpath);
+	fin = fopen(realpath, "rb");
+	fout = fopen(tmppath, "w");
+	if(fout == nil){
+		log("SaveScene: can't create temp file %s\n", tmppath);
+		if(fin) fclose(fin);
+		return;
+	}
+
+	if(fin){
+		// Parse original file, replace inst section, copy everything else
+		char linebuf[1024];
+		bool inInstSection = false;
+		bool instWritten = false;
+
+		while(fgets(linebuf, sizeof(linebuf), fin)){
+			char *s = linebuf;
+			while(*s && isspace((unsigned char)*s)) s++;
+
+			if(!inInstSection){
+				if(strncmp(s, "inst", 4) == 0 && (s[4] == '\0' || s[4] == '\n' || s[4] == '\r')){
+					inInstSection = true;
+					fprintf(fout, "inst\n");
+					// Write all instances at their original positions
+					// Use m_lodId directly - no remapping needed
+					for(int i = 0; i < numInsts; i++){
+						inst = fileInsts[i];
+						WriteInstLine(fout, inst, inst->m_lodId, inst->m_isDeleted);
+					}
+					instWritten = true;
+				}else{
+					fputs(linebuf, fout);
+				}
+			}else{
+				if(strncmp(s, "end", 3) == 0 && (s[3] == '\0' || s[3] == '\n' || s[3] == '\r')){
+					fprintf(fout, "end\n");
+					inInstSection = false;
+				}
+			}
+		}
+		fclose(fin);
+
+		if(!instWritten){
+			fprintf(fout, "inst\n");
+			for(int i = 0; i < numInsts; i++){
+				inst = fileInsts[i];
+				WriteInstLine(fout, inst, inst->m_lodId, inst->m_isDeleted);
+			}
+			fprintf(fout, "end\n");
+		}
+	}else{
+		fprintf(fout, "inst\n");
+		for(int i = 0; i < numInsts; i++){
+			inst = fileInsts[i];
+			WriteInstLine(fout, inst, inst->m_lodId, inst->m_isDeleted);
+		}
+		fprintf(fout, "end\n");
+	}
+
+	fclose(fout);
+
+	remove(realpath);
+	rename(tmppath, realpath);
+
+	int numActive = 0;
+	for(int i = 0; i < numInsts; i++)
+		if(!fileInsts[i]->m_isDeleted) numActive++;
+	log("Saved IPL: %s (%d instances, %d active)\n", filename, numInsts, numActive);
+}
+
+// Save modified instances in binary streaming IPLs by patching
+// directly in the IMG archive (in-place, same file size).
+// Handles deletions (zero objectId) and moved/rotated instances.
+void
+SaveBinaryIpls(void)
+{
+	CPtrNode *p;
+	int numDeleted = 0, numMoved = 0;
+
+	// Collect all streaming instances that need patching
+	struct PatchInfo {
+		int32 imageIndex;
+		int binInstIndex;
+		ObjectInst *inst;
+	};
+	PatchInfo patches[4096];
+	int numPatches = 0;
+
+	for(p = instances.first; p; p = p->next){
+		ObjectInst *inst = (ObjectInst*)p->item;
+		if(inst->m_imageIndex < 0) continue;	// text IPL instance
+		if(!inst->m_isDeleted && !inst->m_isDirty) continue;	// unmodified
+		if(numPatches < 4096){
+			patches[numPatches].imageIndex = inst->m_imageIndex;
+			patches[numPatches].binInstIndex = inst->m_binInstIndex;
+			patches[numPatches].inst = inst;
+			numPatches++;
+		}
+	}
+
+	log("SaveBinaryIpls: %d modified streaming instances to write back\n", numPatches);
+	if(numPatches == 0) return;
+
+	// Process each unique imageIndex
+	int32 processedImgs[256];
+	int numProcessed = 0;
+
+	for(int pi = 0; pi < numPatches; pi++){
+		int32 imgIdx = patches[pi].imageIndex;
+
+		// Check if already processed
+		bool done = false;
+		for(int j = 0; j < numProcessed; j++)
+			if(processedImgs[j] == imgIdx){ done = true; break; }
+		if(done) continue;
+		processedImgs[numProcessed++] = imgIdx;
+
+		// Read the binary IPL
+		int size;
+		uint8 *buffer = ReadFileFromImage(imgIdx, &size);
+		if(*(uint32*)buffer != 0x79726E62) continue;	// not bnry
+
+		FileObjectInstance *instData =
+			(FileObjectInstance*)(buffer + *(int32*)(buffer+0x1C));
+
+		// Apply all patches for this imageIndex
+		bool modified = false;
+		for(int k = 0; k < numPatches; k++){
+			if(patches[k].imageIndex != imgIdx) continue;
+			int idx = patches[k].binInstIndex;
+			ObjectInst *inst = patches[k].inst;
+
+			if(inst->m_isDeleted){
+				instData[idx].objectId = 0;
+				numDeleted++;
+				modified = true;
+			}else{
+				// Write back current position and rotation
+				instData[idx].position = inst->m_translation;
+				instData[idx].rotation = inst->m_rotation;
+				// area flags
+				int area = inst->m_area;
+				if(inst->m_isUnimportant) area |= 0x100;
+				if(inst->m_isUnderWater) area |= 0x400;
+				if(inst->m_isTunnel) area |= 0x800;
+				if(inst->m_isTunnelTransition) area |= 0x1000;
+				instData[idx].area = area;
+				numMoved++;
+				modified = true;
+			}
+		}
+
+		if(!modified) continue;
+
+		// Write the modified buffer back to the IMG
+		uint8 *writeBuf = rwNewT(uint8, size, 0);
+		memcpy(writeBuf, buffer, size);
+		WriteFileToImage(imgIdx, writeBuf, size);
+		rwFree(writeBuf);
+
+		log("Patched binary IPL (image %d)\n", imgIdx & 0xFFFFFF);
+	}
+
+	if(numDeleted || numMoved)
+		log("Binary IPLs: %d deleted, %d updated\n", numDeleted, numMoved);
 }
 
 }

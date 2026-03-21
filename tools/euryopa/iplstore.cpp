@@ -83,25 +83,38 @@ LoadIpl(int slot)
 		insts = (FileObjectInstance*)(buffer + *(int32*)(buffer+0x1C));
 		for(i = 0; i < numInsts; i++){
 
+			// Skip deleted instances (objectId zeroed out)
+			if(insts->objectId == 0){
+				insts++;
+				continue;
+			}
+
 			ObjectDef *obj = GetObjectDef(insts->objectId);
 			if(obj == nil){
 				log("warning: object %d was never defined\n", insts->objectId);
-				return;
+				insts++;
+				continue;
 			}
 
 			ObjectInst *inst = AddInstance();
 			inst->Init(insts);
 			inst->m_file = file;
+			inst->m_imageIndex = ipl->imageIndex;
+			inst->m_binInstIndex = i;
 
 			if(inst->m_lodId < 0)
 				inst->m_lod = nil;
 			else{
 				lodinst = instArray[inst->m_lodId];
-				inst->m_lod = lodinst;
-				lodinst->m_numChildren++;
-				ObjectDef *lodobj = GetObjectDef(lodinst->m_objectId);
-				if(lodinst->m_numChildren == 1 && obj->m_colModel && lodobj->m_colModel != obj->m_colModel)
-					lodobj->m_colModel = obj->m_colModel;
+				if(lodinst == nil){
+					inst->m_lod = nil;	// LOD was deleted
+				}else{
+					inst->m_lod = lodinst;
+					lodinst->m_numChildren++;
+					ObjectDef *lodobj = GetObjectDef(lodinst->m_objectId);
+					if(lodinst->m_numChildren == 1 && obj->m_colModel && lodobj->m_colModel != obj->m_colModel)
+						lodobj->m_colModel = obj->m_colModel;
+				}
 			}
 
 			insts++;

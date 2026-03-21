@@ -467,8 +467,12 @@ static void
 ScanInstList(CPtrList *list, void (*f)(ObjectInst *inst))
 {
 	CPtrNode *p;
-	for(p = list->first; p; p = p->next)
-		f((ObjectInst*)p->item);
+	for(p = list->first; p; p = p->next){
+		ObjectInst *inst = (ObjectInst*)p->item;
+		if(inst->m_isDeleted)
+			continue;
+		f(inst);
+	}
 }
 
 void
