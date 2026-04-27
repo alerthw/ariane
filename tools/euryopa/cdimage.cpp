@@ -407,10 +407,11 @@ RegisterCdImageEntries(CdImage *cdimg, bool warnOnDuplicates)
 			if(obj){
 				if(obj->m_imageIndex >= 0){
 					if(warnOnDuplicates){
-						log("warning: model %s appears multiple times, later archive wins\n", obj->m_name);
+						log("warning: model %s appears multiple times\n", obj->m_name);
+						de->overridden = 1;
 					}
-				}
-				obj->m_imageIndex = idx;
+				}else
+					obj->m_imageIndex = idx;
 			}
 			break;
 
@@ -419,10 +420,11 @@ RegisterCdImageEntries(CdImage *cdimg, bool warnOnDuplicates)
 			txd = GetTxdDef(slot);
 			if(txd->imageIndex >= 0){
 				if(warnOnDuplicates){
-					log("warning: txd %s appears multiple times, later archive wins\n", txd->name);
+					log("warning: txd %s appears multiple times\n", txd->name);
+					de->overridden = 1;
 				}
-			}
-			txd->imageIndex = idx;
+			}else
+				txd->imageIndex = idx;
 			break;
 
 		case FILE_COL:
@@ -430,10 +432,11 @@ RegisterCdImageEntries(CdImage *cdimg, bool warnOnDuplicates)
 			col = GetColDef(slot);
 			if(col->imageIndex >= 0){
 				if(warnOnDuplicates){
-					log("warning: col %s appears multiple times, later archive wins\n", col->name);
+					log("warning: col %s appears multiple times\n", col->name);
+					de->overridden = 1;
 				}
-			}
-			col->imageIndex = idx;
+			}else
+				col->imageIndex = idx;
 			break;
 
 		case FILE_IPL:
@@ -441,10 +444,11 @@ RegisterCdImageEntries(CdImage *cdimg, bool warnOnDuplicates)
 			ipl = GetIplDef(slot);
 			if(ipl->imageIndex >= 0){
 				if(warnOnDuplicates){
-					log("warning: ipl %s appears multiple times, later archive wins\n", ipl->name);
+					log("warning: ipl %s appears multiple times\n", ipl->name);
+					de->overridden = 1;
 				}
-			}
-			ipl->imageIndex = idx;
+			}else
+				ipl->imageIndex = idx;
 			break;
 		}
 	}
