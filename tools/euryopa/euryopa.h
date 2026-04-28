@@ -540,6 +540,7 @@ void LoadTxd(int i);
 void LoadTxd(int i, const char *path);
 void TxdMakeCurrent(int i);
 void TxdSetParent(const char *child, const char *parent);
+void SetTxdLookupContext(const char *objectName, int txdSlot);
 
 
 struct ColFileHeader
