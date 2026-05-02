@@ -972,31 +972,41 @@ ResolveSceneReadPath(const char *filename, char *realpath, size_t realpathSize)
 		if(srcPath){
 			strncpy(realpath, srcPath, realpathSize);
 			realpath[realpathSize-1] = '\0';
+			return true;
+		}
+	}else{
+		for(p = instances.first; p; p = p->next){
+			ObjectInst *inst = (ObjectInst*)p->item;
+			if(inst->m_file == nil)
+				continue;
+			if(strcmp(inst->m_file->name, filename) == 0){
+				srcPath = inst->m_file->sourcePath;
+				break;
+			}
+		}
+		if(srcPath){
+			strncpy(realpath, srcPath, realpathSize);
+			realpath[realpathSize-1] = '\0';
+			return true;
+		}
+	}
+
+	// Fallback if no source path is found (e.g., first time modifying an original file)
+	// We MUST resolve this path relative to the Game Root Directory if it is relative.
+	if(filename[0] == '/' || filename[0] == '\\' || (filename[0] != '\0' && filename[1] == ':')){
+		strncpy(realpath, filename, realpathSize);
+		realpath[realpathSize-1] = '\0';
+		rw::makePath(realpath);
+	}else{
+		char gameRoot[1024];
+		if(GetGameRootDirectory(gameRoot, sizeof(gameRoot)) &&
+		   BuildPath(realpath, realpathSize, gameRoot, filename)){
+			rw::makePath(realpath);
 		}else{
 			strncpy(realpath, filename, realpathSize);
 			realpath[realpathSize-1] = '\0';
 			rw::makePath(realpath);
 		}
-		return true;
-	}
-
-	for(p = instances.first; p; p = p->next){
-		ObjectInst *inst = (ObjectInst*)p->item;
-		if(inst->m_file == nil)
-			continue;
-		if(strcmp(inst->m_file->name, filename) == 0){
-			srcPath = inst->m_file->sourcePath;
-			break;
-		}
-	}
-
-	if(srcPath){
-		strncpy(realpath, srcPath, realpathSize);
-		realpath[realpathSize-1] = '\0';
-	}else{
-		strncpy(realpath, filename, realpathSize);
-		realpath[realpathSize-1] = '\0';
-		rw::makePath(realpath);
 	}
 	return true;
 }
@@ -1144,6 +1154,7 @@ static int
 FormatInstLine(char *dst, size_t size, ObjectInst *inst, int lodIdx, bool deleted)
 {
 	ObjectDef *obj = GetObjectDef(inst->m_objectId);
+	if(obj == nil) return 0;
 
 	int area = inst->m_area;
 	if(isSA()){
@@ -1195,45 +1206,101 @@ BuildSceneFileContents(const char *filename, ObjectInst **insts, int numInsts, b
 
 	out.clear();
 	ResolveSceneReadPath(filename, realpath, sizeof(realpath));
+	
+	// Build mapping from instance pointer to output index for correct LOD references.
+	// Deleted instances are ALWAYS excluded from index counting because:
+	// - In compact mode they are removed from the file entirely
+	// - In non-compact mode they are written as '# ...' comments, and GTA SA's
+	//   LoadLine skips '#' lines — so commented entries don't occupy slots in
+	//   the game's instance array.  LOD indices must match the game's view.
+	std::vector<int> instToOutputIndex(numInsts, -1);
+	int outputIndex = 0;
+	for(int i = 0; i < numInsts; i++){
+		if(insts[i]->m_isDeleted)
+			continue;
+		instToOutputIndex[i] = outputIndex++;
+	}
+	
 	fin = fopen(realpath, "rb");
 	if(fin){
 		char linebuf[1024];
 		bool inInstSection = false;
 		bool instWritten = false;
+		bool hasEnexSection = false;
+		bool ignoringDuplicateInst = false;
 
 		while(fgets(linebuf, sizeof(linebuf), fin)){
 			char *s = linebuf;
 			while(*s && isspace((unsigned char)*s)) s++;
 
+			// Track ENEX section to warn user
+			if(strncmp(s, "enex", 4) == 0 && (s[4] == '\0' || s[4] == '\n' || s[4] == '\r')){
+				hasEnexSection = true;
+			}
+
 			if(!inInstSection){
 				if(strncmp(s, "inst", 4) == 0 && (s[4] == '\0' || s[4] == '\n' || s[4] == '\r')){
 					inInstSection = true;
-					out += "inst\n";
-					for(int i = 0; i < numInsts; i++){
-						inst = insts[i];
-						if(compactDeletes && inst->m_isDeleted)
-							continue;
-						AppendInstLine(out, inst, inst->m_lodId, !compactDeletes && inst->m_isDeleted);
+					if(!instWritten){
+						out += "inst\n";
+						for(int i = 0; i < numInsts; i++){
+							inst = insts[i];
+							if(compactDeletes && inst->m_isDeleted)
+								continue;
+							// Calculate correct LOD index based on output position
+							int lodIdx = -1;
+							if(inst->m_lod){
+								for(int j = 0; j < numInsts; j++){
+									if(insts[j] == inst->m_lod){
+										lodIdx = instToOutputIndex[j];
+										break;
+									}
+								}
+							}
+							AppendInstLine(out, inst, lodIdx, !compactDeletes && inst->m_isDeleted);
+						}
+						instWritten = true;
+					}else{
+						log("SaveScene: WARNING - ignoring duplicate INST section in %s\n", filename);
+						ignoringDuplicateInst = true;
 					}
-					instWritten = true;
 				}else
 					out += linebuf;
 			}else{
 				if(strncmp(s, "end", 3) == 0 && (s[3] == '\0' || s[3] == '\n' || s[3] == '\r')){
-					out += "end\n";
+					if(!ignoringDuplicateInst)
+						out += "end\n";
+					else
+						ignoringDuplicateInst = false;
 					inInstSection = false;
 				}
 			}
 		}
 		fclose(fin);
 
+		if(hasEnexSection){
+			log("SaveScene: %s contains ENEX markers - they are preserved\n", filename);
+		}
+
 		if(!instWritten){
+			if(!out.empty() && out.back() != '\n')
+				out += '\n';
 			out += "inst\n";
 			for(int i = 0; i < numInsts; i++){
 				inst = insts[i];
 				if(compactDeletes && inst->m_isDeleted)
 					continue;
-				AppendInstLine(out, inst, inst->m_lodId, !compactDeletes && inst->m_isDeleted);
+				// Calculate correct LOD index based on output position
+				int lodIdx = -1;
+				if(inst->m_lod){
+					for(int j = 0; j < numInsts; j++){
+						if(insts[j] == inst->m_lod){
+							lodIdx = instToOutputIndex[j];
+							break;
+						}
+					}
+				}
+				AppendInstLine(out, inst, lodIdx, !compactDeletes && inst->m_isDeleted);
 			}
 			out += "end\n";
 		}
@@ -1243,7 +1310,17 @@ BuildSceneFileContents(const char *filename, ObjectInst **insts, int numInsts, b
 			inst = insts[i];
 			if(compactDeletes && inst->m_isDeleted)
 				continue;
-			AppendInstLine(out, inst, inst->m_lodId, !compactDeletes && inst->m_isDeleted);
+			// Calculate correct LOD index based on output position
+			int lodIdx = -1;
+			if(inst->m_lod){
+				for(int j = 0; j < numInsts; j++){
+					if(insts[j] == inst->m_lod){
+						lodIdx = instToOutputIndex[j];
+						break;
+					}
+				}
+			}
+			AppendInstLine(out, inst, lodIdx, !compactDeletes && inst->m_isDeleted);
 		}
 		out += "end\n";
 	}
@@ -1519,6 +1596,7 @@ SaveScene(const char *filename)
 		for(int i = 0; i < numActiveTextInsts; i++)
 			activeTextInsts[i]->m_iplIndex = i;
 	}else{
+		// Simple text-only IPL save (no related streaming IPLs)
 		if(gSaveDestination == SAVE_DESTINATION_MODLOADER){
 			std::vector<PendingSaveFile> pendingFiles;
 			if(!QueueSceneFileSave(filename, fileInsts, numInsts, false, pendingFiles) ||
@@ -1531,6 +1609,10 @@ SaveScene(const char *filename)
 			result.numFailedFiles++;
 			return result;
 		}
+		
+		// Update m_iplIndex to match saved positions (including deleted placeholders)
+		for(int i = 0; i < numInsts; i++)
+			fileInsts[i]->m_iplIndex = i;
 	}
 
 	int numActive = 0;
@@ -1638,7 +1720,7 @@ BuildBinaryImageByIndexInternal(int32 imgIdx, BinaryIplSaveResult *result, int *
 		if(inst->m_imageIndex != imgIdx)
 			continue;
 		imageInsts.push_back(inst);
-		if(inst->m_isDeleted != inst->m_wasSavedDeleted)
+		if(inst->m_isDeleted != inst->m_wasSavedDeleted || !inst->m_savedStateValid)
 			rebuild = true;
 	}
 

@@ -139,18 +139,33 @@ GetEditorRootDirectory(char *dir, size_t size)
 #endif
 }
 
+static char gCachedGameRoot[1024] = "";
+
 bool
 GetGameRootDirectory(char *dir, size_t size)
 {
 	if(size == 0)
 		return false;
 
+	if(gCachedGameRoot[0] != '\0'){
+		strncpy(dir, gCachedGameRoot, size-1);
+		dir[size-1] = '\0';
+		return true;
+	}
+
 #ifdef _WIN32
 	DWORD len = GetCurrentDirectoryA((DWORD)size, dir);
-	return len > 0 && len < size;
+	if(len > 0 && len < size){
+		strncpy(gCachedGameRoot, dir, sizeof(gCachedGameRoot)-1);
+		gCachedGameRoot[sizeof(gCachedGameRoot)-1] = '\0';
+		return true;
+	}
+	return false;
 #else
 	if(getcwd(dir, size) == nil)
 		return false;
+	strncpy(gCachedGameRoot, dir, sizeof(gCachedGameRoot)-1);
+	gCachedGameRoot[sizeof(gCachedGameRoot)-1] = '\0';
 	return true;
 #endif
 }
@@ -297,9 +312,23 @@ fopen_ci(const char *path, const char *mode)
 	const char *redirect = ModloaderRedirectPath(path);
 	if(redirect)
 		return fopen(redirect, mode);
+
 	char cipath[1024];
-	strncpy(cipath, path, 1024);
-	rw::makePath(cipath);
+	if(path[0] == '/' || path[0] == '\\' || (path[0] != '\0' && path[1] == ':')){
+		strncpy(cipath, path, sizeof(cipath)-1);
+		cipath[sizeof(cipath)-1] = '\0';
+		rw::makePath(cipath);
+	}else{
+		char gameRoot[1024];
+		if(GetGameRootDirectory(gameRoot, sizeof(gameRoot)) &&
+		   BuildPath(cipath, sizeof(cipath), gameRoot, path)){
+			rw::makePath(cipath);
+		}else{
+			strncpy(cipath, path, sizeof(cipath)-1);
+			cipath[sizeof(cipath)-1] = '\0';
+			rw::makePath(cipath);
+		}
+	}
 	return fopen(cipath, mode);
 }
 
@@ -635,7 +664,8 @@ bool
 InitRW(void)
 {
 	LoadInitialAntialiasingSettings();
-	sk::requestedMultiSamplingLevels = gRequestedAASamples;
+	// Note: Antialiasing configuration removed from librw skeleton API
+	// AA settings are now handled through engine params if supported
 	if(!sk::InitRW())
 		return false;
 	rw::d3d::isP8supported = false;
@@ -730,7 +760,7 @@ AppEventHandler(sk::Event e, void *param)
 	case PLUGINATTACH:
 		return attachPlugins() ? EVENTPROCESSED : EVENTERROR;
 	case KEYDOWN:
-		if(!io.WantCaptureKeyboard && !io.WantTextInput && !ImGuizmo::IsOver())
+		if(!io.WantTextInput && !ImGuizmo::IsOver())
 			CPad::tempKeystates[*(int*)param] = 1;
 		return EVENTPROCESSED;
 	case KEYUP:
@@ -764,19 +794,9 @@ AppEventHandler(sk::Event e, void *param)
 			TheCamera.m_aspectRatio = (float)r->w/r->h;
 		}
 		break;
-	case FILEDROP: {
-		const char *path = (const char*)param;
-		size_t len = strlen(path);
-		if(len > 7 && strcmp(path + len - 7, ".ariane") == 0){
-			int imported = ImportPrefab(path);
-			if(imported > 0)
-				Toast(TOAST_SPAWN, "Imported %d instance(s) from prefab", imported);
-			else
-				Toast(TOAST_SPAWN, "Failed to import prefab");
-		}else
-			HandleCustomImportDrop(path);
-		return EVENTPROCESSED;
-	}
+	// Note: FILEDROP event removed from librw skeleton
+	// File drag & drop functionality disabled for now
+	// TODO: Re-implement using platform-specific APIs if needed
 	case IDLE:
 		SyncEditorInputState();
 		UpdateEditorWindowState();

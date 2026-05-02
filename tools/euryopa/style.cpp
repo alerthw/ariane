@@ -166,7 +166,7 @@ SetupFonts(void)
 	fontCfg.FontDataOwnedByAtlas = false;
 	io.Fonts->AddFontFromMemoryTTF(
 		(void *)inter_font_data, inter_font_size,
-		fontSize, &fontCfg);
+		fontSize, &fontCfg, io.Fonts->GetGlyphRangesCyrillic());
 
 	// --- Icon font: FontAwesome 6 (embedded, merged) ---
 	ImFontConfig iconCfg;

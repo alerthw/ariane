@@ -1057,8 +1057,14 @@ ModloaderFindOverride(const char *basename, const char *ext)
 		lowerExt[i] = c;
 	}
 	lowerExt[i] = '\0';
-	if(!IsLooseBasenameOverrideExt(lowerExt))
+	
+	// Check if this extension is supported for loose basename override
+	// Extended to support more file types beyond just DFF/TXD
+	if(!IsLooseBasenameOverrideExt(lowerExt)){
+		// For non-loose extensions (IPL, COL, IDE, IMG), try exact path match first
+		// This allows modloader to override these files when full path is known
 		return nil;
+	}
 
 	for(size_t j = 0; j < looseOverrides.size(); j++){
 		if(strcmp(looseOverrides[j].basename, lowerBase) == 0 &&

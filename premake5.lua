@@ -84,7 +84,7 @@ workspace "librwgta"
 			defines { "LIBRW_SDL2" }
 		end
 	filter { "platforms:*d3d9" }
-		defines { "RW_D3D9" }
+		defines { "RW_D3D9", "WITH_D3D" }
 	filter { "platforms:*ps2" }
 		defines { "RW_PS2" }
 		toolset "gcc"

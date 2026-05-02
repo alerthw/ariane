@@ -127,8 +127,11 @@ LoadIpl(int slot, const char *sceneName)
 		insts = (FileObjectInstance*)(buffer + *(int32*)(buffer+0x1C));
 		for(i = 0; i < numInsts; i++){
 
-			// Skip deleted instances (objectId zeroed out)
+			// Skip deleted instances (objectId zeroed out) but reserve the slot
 			if(insts->objectId == 0){
+				// Reserve nil slot in instArray to maintain index consistency for LOD references
+				if(instArray && i < instArraySize)
+					instArray[i] = nil;
 				insts++;
 				continue;
 			}
@@ -136,6 +139,9 @@ LoadIpl(int slot, const char *sceneName)
 			ObjectDef *obj = GetObjectDef(insts->objectId);
 			if(obj == nil){
 				log("warning: object %d was never defined\n", insts->objectId);
+				// Reserve nil slot for undefined objects too
+				if(instArray && i < instArraySize)
+					instArray[i] = nil;
 				insts++;
 				continue;
 			}
@@ -148,6 +154,10 @@ LoadIpl(int slot, const char *sceneName)
 			inst->m_imageIndex = ipl->imageIndex;
 			inst->m_binInstIndex = i;
 			SetInstIplFilterKey(inst, sceneName ? sceneName : (file ? file->name : nil));
+
+			// Store in instArray at correct index for LOD lookups
+			if(instArray && i < instArraySize)
+				instArray[i] = inst;
 
 			if(inst->m_lodId < 0)
 				inst->m_lod = nil;

@@ -8,6 +8,63 @@
 #include "icons.h"
 #include <string>
 #include <vector>
+#include <unordered_map>
+
+int gUILanguage = 0; // 0 = EN, 1 = RU
+static std::unordered_map<std::string, const char*> gDictRU = {
+	{"File", "Файл"},
+	{" Save All IPLs", " Сохранить все IPL"},
+	{"Saves all modified objects in their respective placement files (.ipl).", "Сохраняет все измененные объекты в их файлы размещения (.ipl)."},
+	{" Test in Game", " Проверить в игре"},
+	{"Launches your game and spawns you to the current camera position.\nRequires ariane.asi installed in your game folder.", "Запускает игру и перемещает вас в текущую позицию камеры.\nТребует ariane.asi в папке с игрой."},
+	{"Save to Modloader", "Сохранять в Modloader"},
+	{"When enabled, saves go to modloader/Ariane/ instead of\noverwriting original game files.", "Когда включено, сохранения идут в modloader/Ariane/ вместо перезаписи оригинальных файлов игры."},
+	{"Save New Objects to Original IPL", "Сохранять новые объекты в оригинальный IPL"},
+	{"When enabled, newly placed objects save to their original IPL file\ninstead of custom.ipl. Helps keep objects organized by area.", "Когда включено, новые объекты сохраняются в оригинальный файл IPL вместо custom.ipl."},
+	{" Hot Reload", " Горячая перезагрузка"},
+	{"Instantly apply your changes in a running SA game without restarting.\nRequires ariane.asi.", "Мгновенно применяет изменения в запущенной игре SA без перезапуска.\nТребует ariane.asi."},
+	{" Export Prefab...", " Экспорт префаба..."},
+	{"Saves the selected objects as a reusable prefab file (.ariane)\nthat you can import later or share.", "Сохраняет выделенные объекты как переиспользуемый файл префаба (.ariane)."},
+	{" Import Prefab...", " Импорт префаба..."},
+	{"Loads a previously exported prefab file and places those\nobjects into the current map.", "Загружает ранее экспортированный файл префаба на текущую карту."},
+	{" Import Custom Object...", " Импорт своего объекта..."},
+	{"Import a custom DFF/TXD into the editor as a new placeable object.\nAutomatically registers it in your game files, ready to use in game.", "Импортирует DFF/TXD в редактор как новый объект. Автоматически регистрирует в файлах игры."},
+	{" Exit", " Выход"},
+	{" Window", " Окно"},
+	{" Time & Weather", " Время и Погода"},
+	{" View", " Вид"},
+	{" Rendering", " Рендеринг"},
+	{" Tools", " Инструменты"},
+	{" Object Info", " Информация об объекте"},
+	{" Editor", " Редактор"},
+	{" Object Browser", " Браузер объектов"},
+	{" Changes", " Изменения"},
+	{" Log ", " Журнал "},
+	{" Help", " Справка"},
+	{" Notifications", " Уведомления"},
+	{"Interior", "Интерьер"},
+	{"UI", "Интерфейс"},
+	{"Translation", "Позиция"},
+	{"Rotation", "Вращение"},
+	{"Model", "Модель"},
+	{"Options", "Настройки"},
+	{"Language", "Язык (Language)"},
+	{"What's New in 1.33", "Что нового в 1.33"},
+	{"Russian Localization: Full UI translation with EN/RU toggle in Options.", "Русская локализация: Полный перевод интерфейса с переключателем в Настройках."},
+	{"Manual Transform Input: Type precise Position and Rotation values in Object Info.", "Ручной ввод координат: Вводите точные значения позиции и поворота (XYZ) в Инфо объекта."},
+	{"Fixed Keyboard Shortcuts: Hotkeys are now responsive even when windows are focused.", "Горячие клавиши: Быстрый отклик кнопок даже при фокусе на окнах."},
+	{"Stability Fix: Corrected IDE manifest injection to prevent map load crashes.", "Стабильность: Исправлена запись IDE манифеста для предотвращения вылетов."},
+	{"Rotation (deg)", "Вращение (град)"}
+};
+
+const char* _(const char* text) {
+	if (gUILanguage == 1) {
+		auto it = gDictRU.find(text);
+		if (it != gDictRU.end())
+			return it->second;
+	}
+	return text;
+}
 
 #ifdef _WIN32
 #include <windows.h>
@@ -1126,7 +1183,7 @@ binaryInstNeedsDiskSave(ObjectInst *inst)
 {
 	return inst &&
 		inst->m_imageIndex >= 0 &&
-		(inst->m_isDirty || inst->m_isDeleted != inst->m_wasSavedDeleted);
+		(inst->m_isDirty || inst->m_isDeleted != inst->m_wasSavedDeleted || !inst->m_savedStateValid);
 }
 
 static bool
@@ -1499,6 +1556,7 @@ saveAllIpls(void)
 	const char *checked[512];
 	int numSaved = 0;
 	int numChecked = 0;
+	int numFailed = 0;
 	FileLoader::BinaryIplSaveResult binaryResult = {};
 	bool waterSaveOk = true;
 
@@ -1528,8 +1586,16 @@ saveAllIpls(void)
 			mergeBinarySaveResult(&binaryResult, sceneResult);
 			if(sceneResult.numFailedFiles == 0 &&
 			   sceneResult.numFailedImages == 0 &&
-			   sceneResult.numBlockedEmptyDeletes == 0)
+			   sceneResult.numBlockedEmptyDeletes == 0){
 				saved[numSaved++] = inst->m_file->name;
+			}else{
+				numFailed++;
+				// Show detailed error for this file
+				if(sceneResult.numFailedFiles > 0)
+					Toast(TOAST_SAVE, "Failed to save %s: file write error", inst->m_file->name);
+				else if(sceneResult.numFailedImages > 0)
+					Toast(TOAST_SAVE, "Failed to save %s: binary IPL error", inst->m_file->name);
+			}
 		}
 	}
 
@@ -1543,6 +1609,10 @@ saveAllIpls(void)
 		Toast(TOAST_SAVE, "Failed to save %d binary IPL(s)", binaryResult.numFailedImages);
 	else if(binaryResult.numFailedFiles)
 		Toast(TOAST_SAVE, "Failed to save %d file(s)", binaryResult.numFailedFiles);
+
+	// Show summary if there were failures
+	if(numFailed > 0)
+		Toast(TOAST_SAVE, "Warning: %d file(s) failed to save. Check console for details.", numFailed);
 
 	if(params.water == GAME_SA && WaterLevel::gWaterDirty){
 		bool skippedEmptyModloaderWater =
@@ -2027,6 +2097,7 @@ struct CustomImportState
 	ObjectDef previewObj;
 	char error[512];
 	char warning[512];
+	GameFile *targetIplFile;
 };
 static CustomImportState gCustomImport = {};
 static GameFile *gCustomImportIdeFile = nil;
@@ -2872,15 +2943,52 @@ getOrCreateCustomImportGameFile(GameFile **cache, const char *logicalPath)
 	return *cache;
 }
 
+static GameFile*
+FindMatchingIdeForIpl(GameFile *iplFile)
+{
+	if(!iplFile || !iplFile->name) return nil;
+	char ideName[1024];
+	strncpy(ideName, iplFile->name, sizeof(ideName)-1);
+	ideName[sizeof(ideName)-1] = '\0';
+	char *dot = strrchr(ideName, '.');
+	if(!dot) return nil;
+	
+	strcpy(dot, ".ide");
+	GameFile *ideFile = nil;
+	for(int j = 0; j < NUMOBJECTDEFS; j++){
+		ObjectDef *otherObj = GetObjectDef(j);
+		if(otherObj && otherObj->m_file && rw::strncmp_ci(otherObj->m_file->name, ideName, 1024) == 0){
+			ideFile = otherObj->m_file;
+			break;
+		}
+	}
+	if(!ideFile){
+		char *streamMatch = strstr(ideName, "_stream");
+		if(streamMatch){
+			strcpy(streamMatch, ".ide");
+			for(int j = 0; j < NUMOBJECTDEFS; j++){
+				ObjectDef *otherObj = GetObjectDef(j);
+				if(otherObj && otherObj->m_file && rw::strncmp_ci(otherObj->m_file->name, ideName, 1024) == 0){
+					ideFile = otherObj->m_file;
+					break;
+				}
+			}
+		}
+	}
+	return ideFile;
+}
+
 static bool
-spawnCustomImportedObject(int objectId)
+spawnCustomImportedObject(int objectId, GameFile *targetIplOverride = nil)
 {
 	ObjectDef *obj = GetObjectDef(objectId);
 	if(obj == nil)
 		return false;
 
 	rw::V3d position = GetPlacementPosition();
-	GameFile *file = getOrCreateCustomImportGameFile(&gCustomImportIplFile, CUSTOM_IMPORT_IPL_LOGICAL_PATH);
+	GameFile *file = targetIplOverride
+		? targetIplOverride
+		: getOrCreateCustomImportGameFile(&gCustomImportIplFile, CUSTOM_IMPORT_IPL_LOGICAL_PATH);
 	int maxIplIndex = -1;
 	for(CPtrNode *p = instances.first; p; p = p->next){
 		ObjectInst *other = (ObjectInst*)p->item;
@@ -2950,60 +3058,73 @@ static void
 uiMainmenu(void)
 {
 	if(ImGui::BeginMainMenuBar()){
-		if(ImGui::BeginMenu(ICON_FA_FOLDER_OPEN " File")){
-			if(ImGui::MenuItem(ICON_FA_FLOPPY_DISK " Save All IPLs", "Ctrl+S")){
+		if(ImGui::BeginMenu((std::string(ICON_FA_FOLDER_OPEN " ") + _("File")).c_str())){
+			if(ImGui::MenuItem((std::string(ICON_FA_FLOPPY_DISK " ") + _(" Save All IPLs")).c_str(), "Ctrl+S")){
 				if(saveAllIpls())
 					Toast(TOAST_SAVE, "Saved all IPL files to %s", getSaveDestinationLabel());
 			}
-			ImGui::SetItemTooltip("Saves all modified objects in their respective placement files (.ipl).");
-			if(ImGui::MenuItem(ICON_FA_GAMEPAD " Test in Game", "Ctrl+G")){
+			ImGui::SetItemTooltip("%s", _("Saves all modified objects in their respective placement files (.ipl)."));
+			if(ImGui::MenuItem((std::string(ICON_FA_GAMEPAD " ") + _(" Test in Game")).c_str(), "Ctrl+G")){
 				testInGame();
 			}
-			ImGui::SetItemTooltip("Launches your game and spawns you to the current camera position.\nRequires ariane.asi installed in your game folder.");
-			if(ImGui::MenuItem("Save to Modloader", nil,
+			ImGui::SetItemTooltip("%s", _("Launches your game and spawns you to the current camera position.\nRequires ariane.asi installed in your game folder."));
+			if(ImGui::MenuItem(_("Save to Modloader"), nil,
 			                   gSaveDestination == SAVE_DESTINATION_MODLOADER)){
 				gSaveDestination = gSaveDestination == SAVE_DESTINATION_MODLOADER ?
 					SAVE_DESTINATION_ORIGINAL_FILES : SAVE_DESTINATION_MODLOADER;
 				saveSaveSettings();
 			}
-			ImGui::SetItemTooltip("When enabled, saves go to modloader/Ariane/ instead of\noverwriting original game files.");
-			if(ImGui::MenuItem(ICON_FA_BOLT " Hot Reload", "Ctrl+R")){
+			ImGui::SetItemTooltip("%s", _("When enabled, saves go to modloader/Ariane/ instead of\noverwriting original game files."));
+			if(ImGui::MenuItem(_("Save New Objects to Original IPL"), nil, gSaveToOriginalIpl)){
+				gSaveToOriginalIpl = !gSaveToOriginalIpl;
+				saveSaveSettings();
+			}
+			ImGui::SetItemTooltip("%s", _("When enabled, newly placed objects save to their original IPL file\ninstead of custom.ipl. Helps keep objects organized by area."));
+			if(ImGui::MenuItem((std::string(ICON_FA_BOLT " ") + _(" Hot Reload")).c_str(), "Ctrl+R")){
 				hotReloadIpls();
 			}
-			ImGui::SetItemTooltip("Instantly apply your changes in a running SA game without restarting.\nRequires ariane.asi.");
+			ImGui::SetItemTooltip("%s", _("Instantly apply your changes in a running SA game without restarting.\nRequires ariane.asi."));
 			ImGui::Separator();
-			if(ImGui::MenuItem(ICON_FA_FILE_EXPORT " Export Prefab...", "Ctrl+Shift+E", false, selection.first != nil)){
+			if(ImGui::MenuItem((std::string(ICON_FA_FILE_EXPORT " ") + _(" Export Prefab...")).c_str(), "Ctrl+Shift+E", false, selection.first != nil)){
 				gOpenExportPrefab = true;
 			}
-			ImGui::SetItemTooltip("Saves the selected objects as a reusable prefab file (.ariane)\nthat you can import later or share.");
-			if(ImGui::MenuItem(ICON_FA_FILE_IMPORT " Import Prefab...", "Ctrl+Shift+I")){
+			ImGui::SetItemTooltip("%s", _("Saves the selected objects as a reusable prefab file (.ariane)\nthat you can import later or share."));
+			if(ImGui::MenuItem((std::string(ICON_FA_FILE_IMPORT " ") + _(" Import Prefab...")).c_str(), "Ctrl+Shift+I")){
 				gOpenImportPrefab = true;
 			}
-			ImGui::SetItemTooltip("Loads a previously exported prefab file and places those\nobjects into the current map.");
-			if(ImGui::MenuItem(ICON_FA_CUBE " Import Custom Object...")){
+			ImGui::SetItemTooltip("%s", _("Loads a previously exported prefab file and places those\nobjects into the current map."));
+			if(ImGui::MenuItem((std::string(ICON_FA_CUBE " ") + _(" Import Custom Object...")).c_str())){
 				beginEmptyCustomImport();
 			}
-			ImGui::SetItemTooltip("Import a custom DFF/TXD into the editor as a new placeable object.\nAutomatically registers it in your game files, ready to use in game.");
+			ImGui::SetItemTooltip("%s", _("Import a custom DFF/TXD into the editor as a new placeable object.\nAutomatically registers it in your game files, ready to use in game."));
 			// TODO: restore once whole-map export is safe for runtime use.
-			if(ImGui::MenuItem(ICON_FA_RIGHT_FROM_BRACKET " Exit", "Alt+F4")) sk::globals.quit = 1;
+			if(ImGui::MenuItem((std::string(ICON_FA_RIGHT_FROM_BRACKET " ") + _(" Exit")).c_str(), "Alt+F4")) sk::globals.quit = 1;
 			ImGui::EndMenu();
 		}
-		if(ImGui::BeginMenu(ICON_FA_WINDOW_MAXIMIZE " Window")){
-			if(ImGui::MenuItem(ICON_FA_CLOUD_SUN " Time & Weather", "T", showTimeWeatherWindow)) { showTimeWeatherWindow ^= 1; }
-			if(ImGui::MenuItem(ICON_FA_EYE " View", "V", showViewWindow)) { showViewWindow ^= 1; }
-			if(ImGui::MenuItem(ICON_FA_PAINTBRUSH " Rendering", "R", showRenderingWindow)) { showRenderingWindow ^= 1; }
-			if(ImGui::MenuItem(ICON_FA_WRENCH " Tools", "X", showToolsWindow)) { showToolsWindow ^= 1; }
-			if(ImGui::MenuItem(ICON_FA_CIRCLE_INFO " Object Info", "I", showInstanceWindow)) { showInstanceWindow ^= 1; }
-			if(ImGui::MenuItem(ICON_FA_PEN " Editor", "E", showEditorWindow)) { showEditorWindow ^= 1; }
-			if(ImGui::MenuItem(ICON_FA_MAGNIFYING_GLASS " Object Browser", "B", showBrowserWindow)) { showBrowserWindow ^= 1; }
-			if(ImGui::MenuItem(ICON_FA_CODE_COMPARE " Changes", "F", showDiffWindow)) { showDiffWindow ^= 1; }
-			if(ImGui::MenuItem(ICON_FA_LIST " Log ", nil, showLogWindow)) { showLogWindow ^= 1; }
+		if(ImGui::BeginMenu((std::string(ICON_FA_WINDOW_MAXIMIZE " ") + _(" Window")).c_str())){
+			if(ImGui::MenuItem((std::string(ICON_FA_CLOUD_SUN " ") + _(" Time & Weather")).c_str(), "T", showTimeWeatherWindow)) { showTimeWeatherWindow ^= 1; }
+			if(ImGui::MenuItem((std::string(ICON_FA_EYE " ") + _(" View")).c_str(), "V", showViewWindow)) { showViewWindow ^= 1; }
+			if(ImGui::MenuItem((std::string(ICON_FA_PAINTBRUSH " ") + _(" Rendering")).c_str(), "R", showRenderingWindow)) { showRenderingWindow ^= 1; }
+			if(ImGui::MenuItem((std::string(ICON_FA_WRENCH " ") + _(" Tools")).c_str(), "X", showToolsWindow)) { showToolsWindow ^= 1; }
+			if(ImGui::MenuItem((std::string(ICON_FA_CIRCLE_INFO " ") + _(" Object Info")).c_str(), "I", showInstanceWindow)) { showInstanceWindow ^= 1; }
+			if(ImGui::MenuItem((std::string(ICON_FA_PEN " ") + _(" Editor")).c_str(), "E", showEditorWindow)) { showEditorWindow ^= 1; }
+			if(ImGui::MenuItem((std::string(ICON_FA_MAGNIFYING_GLASS " ") + _(" Object Browser")).c_str(), "B", showBrowserWindow)) { showBrowserWindow ^= 1; }
+			if(ImGui::MenuItem((std::string(ICON_FA_CODE_COMPARE " ") + _(" Changes")).c_str(), "F", showDiffWindow)) { showDiffWindow ^= 1; }
+			if(ImGui::MenuItem((std::string(ICON_FA_LIST " ") + _(" Log ")).c_str(), nil, showLogWindow)) { showLogWindow ^= 1; }
 			if(ImGui::MenuItem("Demo ", nil, showDemoWindow)) { showDemoWindow ^= 1; }
-			if(ImGui::MenuItem(ICON_FA_CIRCLE_QUESTION " Help", nil, showHelpWindow)) { showHelpWindow ^= 1; }
+			if(ImGui::MenuItem((std::string(ICON_FA_CIRCLE_QUESTION " ") + _(" Help")).c_str(), nil, showHelpWindow)) { showHelpWindow ^= 1; }
 			ImGui::Separator();
-			if(ImGui::BeginMenu(ICON_FA_BELL " Notifications")){
+			if(ImGui::BeginMenu((std::string(ICON_FA_BELL " ") + _(" Notifications")).c_str())){
 				uiNotificationSettings();
 				ImGui::EndMenu();
+			}
+			ImGui::EndMenu();
+		}
+		
+		if(ImGui::BeginMenu(_("Options"))){
+			if(ImGui::MenuItem(_("Language"), nil, gUILanguage == 1)){
+				gUILanguage = gUILanguage == 1 ? 0 : 1;
+				saveSaveSettings();
 			}
 			ImGui::EndMenu();
 		}
@@ -3028,11 +3149,11 @@ uiMainmenu(void)
 		if(ImGui::IsItemClicked())
 			currentArea++;
 		ImGui::SameLine();
-		ImGui::Text("Interior");
+		ImGui::Text("%s", _("Interior"));
 
 
 		ImGui::Separator();
-		ImGui::Text("UI");
+		ImGui::Text("%s", _("UI"));
 		ImGui::SameLine();
 		if(ImGui::SmallButton("-")) ImGui::GetIO().FontGlobalScale *= 0.9f;
 		ImGui::SameLine();
@@ -3309,8 +3430,9 @@ finalizeCustomImport(void)
 	ModloaderInit();
 	const char *winningDff = ModloaderFindOverride(gCustomImport.modelName, "dff");
 	const char *winningTxd = ModloaderFindOverride(gCustomImport.txdName, "txd");
-	if(winningDff == nil || !pathsEqualCiNormalized(winningDff, dffTarget) ||
-	   winningTxd == nil || !pathsEqualCiNormalized(winningTxd, txdTarget)){
+	bool dffOk = winningDff && (pathsEqualCiNormalized(winningDff, dffTarget) || pathsEqualCiNormalized(winningDff, gCustomImport.dffSource));
+	bool txdOk = winningTxd && (pathsEqualCiNormalized(winningTxd, txdTarget) || pathsEqualCiNormalized(winningTxd, gCustomImport.txdSource));
+	if(!dffOk || !txdOk){
 		rollbackTouchedFiles(rollbackEntries);
 		ModloaderInit();
 		const char *shownDff = winningDff ? winningDff : "<none>";
@@ -3415,7 +3537,13 @@ finalizeCustomImport(void)
 	obj->m_drawDist[0] = gCustomImport.drawDist;
 	obj->SetFlags(ideFlags);
 	obj->m_isTimed = false;
-	obj->m_file = getOrCreateCustomImportGameFile(&gCustomImportIdeFile, CUSTOM_IMPORT_IDE_LOGICAL_PATH);
+	
+	GameFile *targetIde = nil;
+	if(gCustomImport.targetIplFile)
+		targetIde = FindMatchingIdeForIpl(gCustomImport.targetIplFile);
+	
+	obj->m_file = targetIde ? targetIde : getOrCreateCustomImportGameFile(&gCustomImportIdeFile, CUSTOM_IMPORT_IDE_LOGICAL_PATH);
+	
 	obj->SetupBigBuilding(gCustomImport.objectId, gCustomImport.objectId + 1);
 
 	RequestObject(gCustomImport.objectId);
@@ -3464,13 +3592,16 @@ finalizeCustomImport(void)
 		ModloaderInit();
 		return false;
 	}
-	snprintf(manifestLine, sizeof(manifestLine), "IPL %s", CUSTOM_IMPORT_IPL_LOGICAL_PATH);
-	if(!appendUniqueLine(manifestPath, manifestLine)){
-		snprintf(gCustomImport.error, sizeof(gCustomImport.error), "Failed to update %s", manifestPath);
-		rollbackRegisteredState();
-		rollbackTouchedFiles(rollbackEntries);
-		ModloaderInit();
-		return false;
+	
+	if(!gCustomImport.targetIplFile){
+		snprintf(manifestLine, sizeof(manifestLine), "IPL %s", CUSTOM_IMPORT_IPL_LOGICAL_PATH);
+		if(!appendUniqueLine(manifestPath, manifestLine)){
+			snprintf(gCustomImport.error, sizeof(gCustomImport.error), "Failed to update %s", manifestPath);
+			rollbackRegisteredState();
+			rollbackTouchedFiles(rollbackEntries);
+			ModloaderInit();
+			return false;
+		}
 	}
 	snprintf(manifestLine, sizeof(manifestLine), "COLFILE 0 %s", colLogical);
 	if(!appendUniqueLine(manifestPath, manifestLine)){
@@ -3508,9 +3639,10 @@ finalizeCustomImport(void)
 		}
 	}
 
-	SetCustomPlacementIpl(CUSTOM_IMPORT_IPL_LOGICAL_PATH, iplPath, false);
+	if(!gCustomImport.targetIplFile)
+		SetCustomPlacementIpl(CUSTOM_IMPORT_IPL_LOGICAL_PATH, iplPath, false);
 	SetSpawnObjectId(gCustomImport.objectId);
-	if(!spawnCustomImportedObject(gCustomImport.objectId)){
+	if(!spawnCustomImportedObject(gCustomImport.objectId, gCustomImport.targetIplFile)){
 		snprintf(gCustomImport.error, sizeof(gCustomImport.error), "The object was imported but couldn't be spawned.");
 		return false;
 	}
@@ -3619,6 +3751,42 @@ uiCustomImportPopup(void)
 	uiObjectFlagsEditor(&gCustomImport.previewObj);
 	ImGui::TextDisabled("Raw flags: 0x%X", computeFlagsFromObjectDef(&gCustomImport.previewObj));
 
+	ImGui::Separator();
+	ImGui::Text("Target IPL");
+	{
+		const char *targetLabel = gCustomImport.targetIplFile
+			? gCustomImport.targetIplFile->name
+			: CUSTOM_IMPORT_IPL_LOGICAL_PATH;
+		if(ImGui::BeginCombo("##TargetIPL", targetLabel)){
+			// Default option: custom.ipl
+			if(ImGui::Selectable(CUSTOM_IMPORT_IPL_LOGICAL_PATH, gCustomImport.targetIplFile == nil))
+				gCustomImport.targetIplFile = nil;
+			ImGui::Separator();
+			// Collect unique IPL files from loaded instances
+			GameFile *uniqueFiles[512];
+			int numUnique = 0;
+			for(CPtrNode *p = instances.first; p && numUnique < 512; p = p->next){
+				ObjectInst *o = (ObjectInst*)p->item;
+				if(o && o->m_file && o->m_imageIndex < 0 && pathHasExtensionCi(o->m_file->name, ".ipl")){
+					bool found = false;
+					for(int i = 0; i < numUnique; i++){
+						if(uniqueFiles[i] == o->m_file){ found = true; break; }
+					}
+					if(!found)
+						uniqueFiles[numUnique++] = o->m_file;
+				}
+			}
+			for(int i = 0; i < numUnique; i++){
+				if(ImGui::Selectable(uniqueFiles[i]->name, gCustomImport.targetIplFile == uniqueFiles[i]))
+					gCustomImport.targetIplFile = uniqueFiles[i];
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::TextDisabled(gCustomImport.targetIplFile
+			? "Object will be placed into the selected IPL"
+			: "Object will be placed into modloader/Ariane custom.ipl");
+	}
+
 	if(gCustomImport.hasCol){
 		ImGui::Separator();
 		ImGui::TextDisabled("COL will be exported as %s.col and renamed internally if needed", gCustomImport.modelName);
@@ -3659,6 +3827,13 @@ uiHelpWindow(void)
 {
 	ImGui::Begin(ICON_FA_CIRCLE_QUESTION " Help", &showHelpWindow);
 
+	if(ImGui::CollapsingHeader(_("What's New in 1.33"), ImGuiTreeNodeFlags_DefaultOpen)){
+		ImGui::BulletText("%s", _("Russian Localization: Full UI translation with EN/RU toggle in Options."));
+		ImGui::BulletText("%s", _("Manual Transform Input: Type precise Position and Rotation values in Object Info."));
+		ImGui::BulletText("%s", _("Fixed Keyboard Shortcuts: Hotkeys are now responsive even when windows are focused."));
+		ImGui::BulletText("%s", _("Stability Fix: Corrected IDE manifest injection to prevent map load crashes."));
+	}
+	ImGui::Separator();
 	ImGui::BulletText("Camera controls:\n"
 		"LMB: first person look around\n"
 		"Ctrl+Alt+LMB; W/S: move forward/backward\n"
@@ -3982,7 +4157,7 @@ uiRendering(void)
 			if(ImGui::Selectable(getAASamplesLabel(samples), selected)){
 				if(gRequestedAASamples != samples){
 					gRequestedAASamples = samples;
-					sk::requestedMultiSamplingLevels = samples;
+					// Note: AA configuration removed from librw skeleton API
 					SaveEditorSettingsNow();
 					Toast(TOAST_SAVE, "Anti-aliasing set to %s. Restart Ariane to apply it.",
 						getAASamplesLabel(samples));
@@ -4463,7 +4638,41 @@ uiInstInfo(ObjectInst *inst)
 	obj = GetObjectDef(inst->m_objectId);
 
 	InputTextReadonly<MODELNAMELEN>("Model##Inst", obj->m_name);
-	InputTextReadonly<1024>("IPL", inst->m_file->name);
+	
+	if(ImGui::BeginCombo("IPL", inst->m_file ? inst->m_file->name : "None")){
+		GameFile *uniqueFiles[512];
+		int numUnique = 0;
+		for(CPtrNode *p = instances.first; p && numUnique < 512; p = p->next){
+			ObjectInst *o = (ObjectInst*)p->item;
+			if(o && o->m_file && pathHasExtensionCi(o->m_file->name, ".ipl")){
+				bool found = false;
+				for(int i = 0; i < numUnique; i++){
+					if(uniqueFiles[i] == o->m_file){
+						found = true;
+						break;
+					}
+				}
+				if(!found)
+					uniqueFiles[numUnique++] = o->m_file;
+			}
+		}
+		for(int i = 0; i < numUnique; i++){
+			if(ImGui::Selectable(uniqueFiles[i]->name, inst->m_file == uniqueFiles[i])){
+				inst->m_file = uniqueFiles[i];
+				inst->m_imageIndex = -1;
+				inst->m_isDirty = true;
+				StampChangeSeq(inst);
+				
+				// Automatically change the object's IDE to match the new IPL
+				if(inst->m_file){
+					GameFile *ideFile = FindMatchingIdeForIpl(inst->m_file);
+					if(ideFile)
+						obj->m_file = ideFile;
+				}
+			}
+		}
+		ImGui::EndCombo();
+	}
 
 	if(inst->m_isDeleted){
 		ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ImColor(255, 80, 80));
@@ -4483,12 +4692,46 @@ uiInstInfo(ObjectInst *inst)
 	}
 
 	bool changed = false;
-	changed |= ImGui::DragFloat3("Translation", (float*)&inst->m_translation, 0.1f);
-	ImGui::Text("Rotation: %.3f %.3f %.3f %.3f",
-		inst->m_rotation.x,
-		inst->m_rotation.y,
-		inst->m_rotation.z,
-		inst->m_rotation.w);
+	changed |= ImGui::InputFloat3(_("Translation"), (float*)&inst->m_translation);
+
+	// Rotation as Euler angles in degrees.
+	// Cache prevents gimbal drift: we only decompose quat→euler when the instance changes.
+	{
+		const float PI = 3.14159265f;
+		static ObjectInst *eulerCacheInst = nil;
+		static float eulerCache[3] = {}; // Roll X, Pitch Y, Yaw Z
+
+		if(inst != eulerCacheInst){
+			eulerCacheInst = inst;
+			float qx = inst->m_rotation.x, qy = inst->m_rotation.y;
+			float qz = inst->m_rotation.z, qw = inst->m_rotation.w;
+			float sinp = 2.0f*(qw*qy - qz*qx);
+			if(sinp >  1.0f) sinp =  1.0f;
+			if(sinp < -1.0f) sinp = -1.0f;
+			eulerCache[0] = atan2f(2.0f*(qw*qx + qy*qz), 1.0f - 2.0f*(qx*qx + qy*qy)) * (180.0f/PI);
+			eulerCache[1] = asinf(sinp) * (180.0f/PI);
+			eulerCache[2] = atan2f(2.0f*(qw*qz + qx*qy), 1.0f - 2.0f*(qy*qy + qz*qz)) * (180.0f/PI);
+		}
+
+		if(ImGui::InputFloat3(_("Rotation (deg)"), eulerCache, "%.1f")){
+			for(int i = 0; i < 3; i++){
+				while(eulerCache[i] >  180.0f) eulerCache[i] -= 360.0f;
+				while(eulerCache[i] < -180.0f) eulerCache[i] += 360.0f;
+			}
+			float rx = eulerCache[0]*(PI/180.0f)*0.5f;
+			float ry = eulerCache[1]*(PI/180.0f)*0.5f;
+			float rz = eulerCache[2]*(PI/180.0f)*0.5f;
+			float cx = cosf(rx), sx = sinf(rx);
+			float cy = cosf(ry), sy = sinf(ry);
+			float cz = cosf(rz), sz = sinf(rz);
+			inst->m_rotation.x = sx*cy*cz + cx*sy*sz;
+			inst->m_rotation.y = cx*sy*cz - sx*cy*sz;
+			inst->m_rotation.z = cx*cy*sz + sx*sy*cz;
+			inst->m_rotation.w = cx*cy*cz - sx*sy*sz;
+			changed = true;
+		}
+	}
+
 	if(changed){
 		StampChangeSeq(inst);
 		inst->m_isDirty = true;
@@ -4503,14 +4746,14 @@ uiInstInfo(ObjectInst *inst)
 		}
 	}
 
-	ImGui::InputInt("Interior", &inst->m_area);
+	ImGui::InputInt(_("Interior"), &inst->m_area);
 	if(inst->m_area < 0) inst->m_area = 0;
 
 	if(params.objFlagset == GAME_SA){
-		ImGui::Checkbox("Unimportant", &inst->m_isUnimportant);
-		ImGui::Checkbox("Underwater", &inst->m_isUnderWater);
-		ImGui::Checkbox("Tunnel", &inst->m_isTunnel);
-		ImGui::Checkbox("Tunnel Transition", &inst->m_isTunnelTransition);
+		ImGui::Checkbox(_("Unimportant"), &inst->m_isUnimportant);
+		ImGui::Checkbox(_("Underwater"), &inst->m_isUnderWater);
+		ImGui::Checkbox(_("Tunnel"), &inst->m_isTunnel);
+		ImGui::Checkbox(_("Tunnel Transition"), &inst->m_isTunnelTransition);
 	}
 }
 
@@ -4523,7 +4766,7 @@ uiObjInfo(ObjectDef *obj)
 	txd = GetTxdDef(obj->m_txdSlot);
 
 	ImGui::Text("ID: %d\n", obj->m_id);
-	InputTextReadonly<MODELNAMELEN>("Model", obj->m_name);
+	InputTextReadonly<MODELNAMELEN>(_("Model"), obj->m_name);
 	InputTextReadonly<MODELNAMELEN>("TXD", txd ? txd->name : "");
 
 	InputTextReadonly<1024>("IDE", obj->m_file ? obj->m_file->name : "");
@@ -4644,6 +4887,9 @@ loadSaveSettings(void)
 				gSaveDestination = SAVE_DESTINATION_MODLOADER;
 			else
 				gSaveDestination = SAVE_DESTINATION_ORIGINAL_FILES;
+		}else if(strcmp(key, "save_to_original_ipl") == 0){
+			if(parseBoolSetting(value, &boolValue))
+				gSaveToOriginalIpl = boolValue;
 		}else if(strcmp(key, "automatic_backups") == 0){
 			if(parseBoolSetting(value, &boolValue))
 				gAutomaticBackupsEnabled = boolValue;
@@ -4905,7 +5151,7 @@ loadSaveSettings(void)
 	normalizePersistentSettings();
 	gRequestedAASamples = sanitizeAASamples(gRequestedAASamples,
 		rw::Engine::getMaxMultiSamplingLevels());
-	sk::requestedMultiSamplingLevels = gRequestedAASamples;
+	// Note: AA configuration removed from librw skeleton API
 
 	RefreshIplVisibilityEntries();
 	for(size_t i = 0; i < gSavedIplVisibilityStates.size(); i++){
@@ -4965,6 +5211,7 @@ saveSaveSettings(void)
 	}
 	fprintf(f, "window_maximized %d\n", gSavedWindowMaximized ? 1 : 0);
 	fprintf(f, "save_destination %d\n", (int)gSaveDestination);
+	fprintf(f, "save_to_original_ipl %d\n", gSaveToOriginalIpl ? 1 : 0);
 	fprintf(f, "automatic_backups %d\n", gAutomaticBackupsEnabled ? 1 : 0);
 	fprintf(f, "automatic_backup_interval %d\n", gAutomaticBackupIntervalSeconds);
 	fprintf(f, "automatic_backup_keep %d\n", gAutomaticBackupKeepCount);
@@ -5299,7 +5546,7 @@ uiEditorWindow(void)
 static void
 uiToolsWindow(void)
 {
-	ImGui::Begin(ICON_FA_WRENCH " Tools", &showToolsWindow);
+	ImGui::Begin((std::string(ICON_FA_WRENCH " ") + _("Tools") + "###Tools").c_str(), &showToolsWindow);
 
 	// Gizmo
 	ImGui::Checkbox("Gizmo", &gGizmoEnabled);
@@ -5761,16 +6008,16 @@ uiWaterWindow(void)
 static void
 uiInstWindow(void)
 {
-	ImGui::Begin(ICON_FA_CIRCLE_INFO " Object Info", &showInstanceWindow);
+	ImGui::Begin((std::string(ICON_FA_CIRCLE_INFO " ") + _("Object Info") + "###Object Info").c_str(), &showInstanceWindow);
 
 	if(selection.first){
 		int numSelected = 0;
 		for(CPtrNode *sel = selection.first; sel; sel = sel->next)
 			numSelected++;
-		ImGui::Text("%d selected", numSelected);
+		ImGui::Text("%d %s", numSelected, _("selected"));
 		char exportDir[1024];
 		bool haveExportDir = GetArianeDataPath(exportDir, sizeof(exportDir), "dff-txd-exports");
-		if(ImGui::Button("Export DFF")){
+		if(ImGui::Button(_("Export DFF"))){
 			if(!haveExportDir){
 				Toast(TOAST_SAVE, "Failed to resolve dff-txd-exports path");
 			}else{
@@ -5803,24 +6050,24 @@ uiInstWindow(void)
 
 		ObjectInst *inst = (ObjectInst*)selection.first->item;
 		ObjectDef *obj = GetObjectDef(inst->m_objectId);
-		if(ImGui::CollapsingHeader("Instance"))
+		if(ImGui::CollapsingHeader(_("Instance")))
 			uiInstInfo(inst);
-		if(ImGui::CollapsingHeader("Object"))
+		if(ImGui::CollapsingHeader(_("Object")))
 			uiObjInfo(obj);
 		if(obj->m_numEffects)
-			if(ImGui::CollapsingHeader("Effects"))
+			if(ImGui::CollapsingHeader(_("Effects")))
 				uiFxInfo(inst);
 		if(obj->m_carPathIndex >=0 || obj->m_pedPathIndex >= 0)
-			if(ImGui::CollapsingHeader("Legacy Paths"))
+			if(ImGui::CollapsingHeader(_("Legacy Paths")))
 				uiPathInfo(inst);
 	}else{
 		if(Path::selectedNode)// && Path::selectedNode->isDetached())
-		if(ImGui::CollapsingHeader("Legacy Paths"))
+		if(ImGui::CollapsingHeader(_("Legacy Paths")))
 			uiPathInfo(nil);
 		if(SAPaths::HasInfoToShow()){
 			if(gSaNodeJustSelected)
 				ImGui::SetNextItemOpen(true);
-			if(ImGui::CollapsingHeader("San Andreas Streamed Paths"))
+			if(ImGui::CollapsingHeader(_("San Andreas Streamed Paths")))
 				SAPaths::DrawInfoPanel();
 		}
 

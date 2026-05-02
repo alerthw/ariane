@@ -1054,6 +1054,9 @@ static char currentCustomIplPath[256] = "data\\maps\\custom.ipl";
 static char currentCustomIplSourcePath[1024];
 static bool currentCustomIplAppendToDat = true;
 
+// NEW: Option to save new objects to their original IPL instead of custom.ipl
+bool gSaveToOriginalIpl = false;
+
 #define LOD_LOOKUP_SIZE 20000
 static int lodLookup[LOD_LOOKUP_SIZE];
 
@@ -1228,6 +1231,66 @@ GetOrCreateCustomIplFile(void)
 	return customIplFile;
 }
 
+// NEW: Get the original IPL file for an object definition
+static GameFile*
+GetOriginalIplForObject(int objectId, int *outImageIndex)
+{
+	ObjectDef *obj = GetObjectDef(objectId);
+	if(obj == nil || obj->m_file == nil)
+		return nil;
+	
+	// Find an existing instance with the same object ID to get its IPL file
+	CPtrNode *p;
+	for(p = instances.first; p; p = p->next){
+		ObjectInst *inst = (ObjectInst*)p->item;
+		if(inst->m_objectId == objectId && inst->m_file){
+			if(outImageIndex) *outImageIndex = inst->m_imageIndex;
+			return inst->m_file;
+		}
+	}
+	
+	// If no existing instance, try to guess the IPL from the IDE file name
+	char iplName[1024];
+	strncpy(iplName, obj->m_file->name, sizeof(iplName)-1);
+	iplName[sizeof(iplName)-1] = '\0';
+	char *dot = strrchr(iplName, '.');
+	if(dot && rw::strncmp_ci(dot, ".ide", 4) == 0){
+		strcpy(dot, ".ipl");
+		GameFile *file = nil;
+		for(CPtrNode *p = instances.first; p; p = p->next){
+			ObjectInst *inst = (ObjectInst*)p->item;
+			if(inst && inst->m_file && rw::strncmp_ci(inst->m_file->name, iplName, 1024) == 0){
+				file = inst->m_file;
+				break;
+			}
+		}
+		if(file){
+			if(outImageIndex) *outImageIndex = -1;
+			return file;
+		}
+	}
+	
+	// No existing instances and no matching IDE-based IPL found, return nil (will fall back to custom IPL)
+	return nil;
+}
+
+// NEW: Get the appropriate IPL file for spawning based on settings
+static GameFile*
+GetSpawnTargetIplFile(int objectId, int *outImageIndex)
+{
+	if(outImageIndex) *outImageIndex = -1;
+	if(gSaveToOriginalIpl){
+		GameFile *originalFile = GetOriginalIplForObject(objectId, outImageIndex);
+		if(originalFile){
+			log("Spawning object %d to original IPL: %s\n", objectId, originalFile->name);
+			return originalFile;
+		}
+		// Fall back to custom IPL if no original found
+		log("No original IPL found for object %d, using custom IPL\n", objectId);
+	}
+	return GetOrCreateCustomIplFile();
+}
+
 static int
 GetMaxIplIndexForFile(GameFile *file)
 {
@@ -1336,7 +1399,9 @@ SpawnPlaceObjectNoUndo(rw::V3d position, const rw::Quat *orientation,
 	if(obj == nil) return 0;
 	if(outInsts == nil || outCapacity <= 0) return 0;
 
-	GameFile *file = GetOrCreateCustomIplFile();
+	// Use new logic to determine target IPL file
+	int imageIndex = -1;
+	GameFile *file = GetSpawnTargetIplFile(spawnObjectId, &imageIndex);
 	int maxIdx = GetMaxIplIndexForFile(file);
 
 	int lodObjId = -1;
@@ -1352,11 +1417,13 @@ SpawnPlaceObjectNoUndo(rw::V3d position, const rw::Quat *orientation,
 	ObjectInst *lodInst = nil;
 	if(lodObjId >= 0 && GetObjectDef(lodObjId) && n < outCapacity){
 		lodInst = createSpawnedInstance(lodObjId, position, file, ++maxIdx, orientation);
+		lodInst->m_imageIndex = imageIndex;
 		outInsts[n++] = lodInst;
 	}
 
 	if(n >= outCapacity) return n;
 	ObjectInst *hdInst = createSpawnedInstance(spawnObjectId, position, file, ++maxIdx, orientation);
+	hdInst->m_imageIndex = imageIndex;
 	if(lodInst)
 		finalizeLinkedLod(hdInst, lodInst);
 	hdInst->Select();

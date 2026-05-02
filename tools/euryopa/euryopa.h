@@ -473,6 +473,7 @@ uint32 GetLatestChangeSeq(void);
 
 // Object Spawner
 extern bool gPlaceMode;
+extern bool gSaveToOriginalIpl;  // NEW: Save new objects to their original IPL instead of custom.ipl
 void InitLodLookup(void);
 void SpawnPlaceObject(rw::V3d position, const rw::Quat *orientation = nil);
 int SpawnPlaceObjectNoUndo(rw::V3d position, const rw::Quat *orientation,
